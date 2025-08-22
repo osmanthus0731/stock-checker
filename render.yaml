@@ -1,0 +1,20 @@
+
+services:
+  - type: web
+    name: inventory-system
+    env: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -c gunicorn.conf.py wsgi:app
+    envVars:
+      - key: MONGO_URI
+        sync: false
+      - key: FLASK_SECRET
+        sync: false
+      - key: WEB_CONCURRENCY
+        value: "2"
+      - key: GUNICORN_THREADS
+        value: "4"
+      - key: GUNICORN_TIMEOUT
+        value: "120"

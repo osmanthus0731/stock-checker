@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}ITMMST — Products{% endblock %}
+{% block content %}
+<h2 style="margin-bottom:12px;">ITMMST (imported)</h2>
+
+<div style="overflow:auto;border:1px solid #eee;border-radius:8px;background:#fff;">
+  <table style="width:100%;border-collapse:collapse;">
+    <thead>
+      <tr style="background:#f8fafb;">
+        <th style="text-align:left;padding:10px;border-bottom:1px solid #eee;">UID</th>
+        <th style="text-align:left;padding:10px;border-bottom:1px solid #eee;">Product Name</th>
+        <th style="text-align:left;padding:10px;border-bottom:1px solid #eee;">Reference</th>
+        <th style="text-align:left;padding:10px;border-bottom:1px solid #eee;">Locations</th>
+        <th style="text-align:left;padding:10px;border-bottom:1px solid #eee;">QR</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in items %}
+      <tr style="border-bottom:1px solid #f2f2f2;">
+        <td style="padding:10px;">{{ p.uid }}</td>
+        <td style="padding:10px;">{{ p.name }}</td>
+        <td style="padding:10px;">{{ p.readable_id or '-' }}</td>
+        <td style="padding:10px;">
+          {% if p.locations %}
+            {% for l in p.locations %}
+              <div>{{ l.area }}: {{ l.quantity }}</div>
+            {% endfor %}
+          {% else %}-{% endif %}
+        </td>
+        <td style="padding:10px;">
+          <img src="{{ url_for('qr', uid=p.uid) }}" alt="QR" style="height:90px;">
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" style="padding:14px;color:#777;">No records.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% set pages = (total // per_page) + (1 if total % per_page else 0) %}
+{% if pages > 1 %}
+  <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+    {% if page > 1 %}
+      <a href="{{ url_for('itmmst_view', page=page-1) }}"
+         style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;text-decoration:none;">Prev</a>
+    {% endif %}
+    <span style="color:#555;">Page {{ page }} / {{ pages }} • Total {{ total }}</span>
+    {% if page < pages %}
+      <a href="{{ url_for('itmmst_view', page=page+1) }}"
+         style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;text-decoration:none;">Next</a>
+    {% endif %}
+  </div>
+{% endif %}
+{% endblock %}

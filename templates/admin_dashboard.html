@@ -1,0 +1,118 @@
+{% extends "index.html" %}
+{% block title %}Admin Dashboard{% endblock %}
+
+{% block content %}
+<h1>Admin Dashboard</h1>
+
+<form method="get" class="row" style="margin:10px 0 16px; gap:10px;">
+  <label>Category</label>
+  <select name="filter_category">
+    {% for c in categories %}
+      <option value="{{ c }}" {{ 'selected' if selected_category == c }}>{{ c }}</option>
+    {% endfor %}
+  </select>
+
+  <label>Volume</label>
+  <select name="volume">
+    <option value="" {{ 'selected' if not selected_volume }}>Any</option>
+    {% for v in volumes %}
+      <option value="{{ v }}" {{ 'selected' if selected_volume == (v|string) }}>{{ v }} ml</option>
+    {% endfor %}
+  </select>
+
+  <!-- NEW: Pict filter -->
+  <label>Pict</label>
+  <select name="pict">
+    <option value="" {{ 'selected' if not selected_pict }}>Any</option>
+    {% for pv in pict_values %}
+      <option value="{{ pv }}" {{ 'selected' if selected_pict == (pv|string) }}>{{ pv }}</option>
+    {% endfor %}
+  </select>
+
+  <button class="btn" type="submit">Filter</button>
+</form>
+
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>UID</th>
+        <th>Name</th>
+        <th>MSSID</th>
+        <th>Category</th>
+        <th>Pict</th> <!-- NEW column -->
+        <th>Volume</th>
+        <th>Locations</th>
+        <th style="width:140px;">QR</th>
+        <th style="width:120px;">Pricing</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in products %}
+      <tr>
+        <td>{{ p.uid }}</td>
+        <td>{{ p.name }}</td>
+        <td>{{ p.readable_id }}</td>
+        <td>{{ p.category }}</td>
+        <td>{{ p.pict if p.pict is not none else '—' }}</td>
+        <td>{{ p.volume_ml if p.volume_ml else '—' }}</td>
+        <td>
+          {% if p.locations %}
+            {% for L in p.locations %}
+              <span style="display:inline-block;background:#eef2ff;border:1px solid #e5e7eb;padding:4px 8px;border-radius:10px;margin-right:6px;margin-bottom:4px;">
+                {{ L.area }}: <strong>{{ L.quantity }}</strong>
+              </span>
+            {% endfor %}
+          {% else %} — {% endif %}
+        </td>
+        <td>
+          <button class="btn" type="button" onclick="toggleQR('{{ p.uid }}')">QR</button>
+          <div id="qrwrap-{{ p.uid }}" style="display:none;margin-top:8px;">
+            <!-- image injected on click -->
+          </div>
+        </td>
+        <td>
+          <a class="btn" href="{{ url_for('view_pricing', uid=p.uid) }}">View</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if total_pages > 1 %}
+  <div style="margin-top:14px;">
+    {% for i in pages %}
+      {% if i == page %}
+        <span class="btn" style="opacity:.85">{{ i }}</span>
+      {% else %}
+        <a class="btn" href="{{ url_for('admin_dashboard', page=i, filter_category=selected_category, volume=selected_volume, pict=selected_pict) }}">{{ i }}</a>
+      {% endif %}
+    {% endfor %}
+    {% if pages[-1] < total_pages %}
+      <span class="muted">…</span>
+      <a class="btn" href="{{ url_for('admin_dashboard', page=total_pages, filter_category=selected_category, volume=selected_volume, pict=selected_pict) }}">{{ total_pages }}</a>
+    {% endif %}
+  </div>
+{% endif %}
+
+<script>
+  function toggleQR(uid){
+    const wrap = document.getElementById('qrwrap-' + uid);
+    if(!wrap) return;
+    const visible = wrap.style.display === 'block';
+    if(visible){ wrap.style.display = 'none'; return; }
+    if(!wrap.querySelector('img')){
+      const img = document.createElement('img');
+      img.width = 96; img.height = 96;
+      img.style.display = 'block';
+      img.style.border = '1px solid #eee';
+      img.style.borderRadius = '8px';
+      img.loading = 'lazy';
+      img.src = "{{ url_for('qr', uid='__UID__') }}".replace('__UID__', uid);
+      wrap.appendChild(img);
+    }
+    wrap.style.display = 'block';
+  }
+</script>
+{% endblock %}

@@ -1,0 +1,309 @@
+{% extends "base.html" %}
+{% block title %}Admin Action Logs{% endblock %}
+
+{% block content %}
+<div class="wrap logs-wrap">
+  <h2 class="page-title">Admin Action Logs</h2>
+
+  <!-- Filters -->
+  <form class="card filters" method="get" action="{{ url_for('admin_log_view') }}">
+    <div class="row">
+      <div class="field">
+        <label>Action</label>
+        <select name="action">
+          <option value="all" {{ 'selected' if action_filter == 'all' }}>All</option>
+          <option value="edit_stock" {{ 'selected' if action_filter == 'edit_stock' }}>Edit Stock</option>
+          <option value="approve" {{ 'selected' if action_filter == 'approve' }}>Approve</option>
+          <option value="decline" {{ 'selected' if action_filter == 'decline' }}>Decline</option>
+          <option value="extend_locations" {{ 'selected' if action_filter == 'extend_locations' }}>Extend Locations</option>
+          <option value="add_product" {{ 'selected' if action_filter == 'add_product' }}>Add Product</option>
+          <option value="delete_product" {{ 'selected' if action_filter == 'delete_product' }}>Delete Product</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>Product UID</label>
+        <input type="text" name="product_uid" value="{{ product_uid_filter }}" placeholder="e.g. P001" />
+      </div>
+
+      <div class="field">
+        <label>Start Date</label>
+        <input type="date" name="start_date" value="{{ start_date_str }}" />
+      </div>
+
+      <div class="field">
+        <label>End Date</label>
+        <input type="date" name="end_date" value="{{ end_date_str }}" />
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-primary" type="submit">Apply</button>
+        <a class="btn btn-ghost" href="{{ url_for('admin_log_view') }}">Reset</a>
+      </div>
+    </div>
+  </form>
+
+  <!-- Clear by range -->
+  <form class="card range-clear" method="post" action="{{ url_for('clear_logs_range') }}">
+    <div class="row">
+      <div class="field">
+        <label>Delete Logs: Start</label>
+        <input type="date" name="start_date" required />
+      </div>
+      <div class="field">
+        <label>End</label>
+        <input type="date" name="end_date" required />
+      </div>
+      {% if product_uid_filter %}
+        <input type="hidden" name="product_uid" value="{{ product_uid_filter }}" />
+      {% endif %}
+      <div class="actions">
+        <button class="btn btn-danger" type="submit" onclick="return confirm('Delete logs in this date range?')">Delete Logs</button>
+      </div>
+    </div>
+  </form>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="flash-stack">
+        {% for category, msg in messages %}
+          <div class="flash {{ category }}">{{ msg }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  <!-- Logs Table -->
+  <div class="card table-card">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Action</th>
+          <th>Admin</th>
+          <th>Product UID / Submission ID</th>
+          <th>Location</th>
+          <th>Change</th>
+          <th>Timestamp</th>
+          <th>Details</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for log in logs %}
+        {% set has_detail = (log.action in ['edit_stock','approve']) and (log.changes_detail and log.changes_detail|length > 0) %}
+        <tr>
+          <td class="mono"><span class="tag">{{ log.action }}</span></td>
+          <td class="mono">{{ log.admin }}</td>
+          <td>
+            {% if log.product_uid %}
+              <a class="uid-link" href="{{ url_for('admin_log_view_for_uid', uid=log.product_uid) }}">{{ log.product_uid }}</a>
+            {% else %}
+              <span class="muted">-</span>
+            {% endif %}
+            {% if log.submission_id %}
+              <div class="muted mono">sid: {{ log.submission_id }}</div>
+            {% endif %}
+          </td>
+          <td>{{ log.location if log.location else '-' }}</td>
+          <td class="muted">
+            {{ log.change if log.change else 'No changes recorded' }}
+          </td>
+          <td class="mono">{{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+          <td>
+            {% if has_detail or (log.before and log.after) %}
+              <button class="btn btn-link" type="button" onclick="toggleDetails('d{{ loop.index }}')">
+                View details ▼
+              </button>
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+          </td>
+        </tr>
+
+        {% if has_detail or (log.before and log.after) %}
+        <tr id="d{{ loop.index }}" class="details" style="display:none;">
+          <td colspan="7">
+            {% if has_detail %}
+              <div class="details-head">
+                <h4>Differences <span class="pill">{{ log.changes_detail|length }}</span></h4>
+              </div>
+              <table class="subtable">
+                <thead><tr><th>Area</th><th>Before</th><th>After</th></tr></thead>
+                <tbody>
+                  {% for d in log.changes_detail %}
+                    <tr>
+                      <td class="mono">{{ d.area }}</td>
+                      <td>{{ d.before_qty }}</td>
+                      <td>{{ d.after_qty }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            {% else %}
+              <div class="muted">No per-location differences recorded.</div>
+            {% endif %}
+
+            {% if log.before and log.after %}
+              <h4 class="stack-space">Full Before / After</h4>
+              <div class="two-col">
+                <div>
+                  <table class="subtable">
+                    <thead><tr><th colspan="2">Before</th></tr></thead>
+                    <tbody>
+                      {% for b in log.before %}
+                        <tr><td class="mono">{{ b.area }}</td><td>{{ b.quantity }}</td></tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+                <div>
+                  <table class="subtable">
+                    <thead><tr><th colspan="2">After</th></tr></thead>
+                    <tbody>
+                      {% for a in log.after %}
+                        <tr><td class="mono">{{ a.area }}</td><td>{{ a.quantity }}</td></tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            {% endif %}
+          </td>
+        </tr>
+        {% endif %}
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Pagination -->
+  {% if total_pages and total_pages > 1 %}
+    <div class="pagination">
+      {% set q = request.args.to_dict() %}
+      {% set cur = page %}
+      {% set prev = 1 if cur<=1 else (cur-1) %}
+      {% set next = total_pages if cur>=total_pages else (cur+1) %}
+
+      {% set q_prev = q.copy() %}{% set _ = q_prev.update({'page': prev}) %}
+      <a class="page-btn" href="{{ url_for('admin_log_view', **q_prev) }}">Prev</a>
+
+      {% for p in range(1, total_pages+1) %}
+        {% set q_p = q.copy() %}{% set _ = q_p.update({'page': p}) %}
+        {% if p == cur %}
+          <span class="page-btn active">{{ p }}</span>
+        {% else %}
+          <a class="page-btn" href="{{ url_for('admin_log_view', **q_p) }}">{{ p }}</a>
+        {% endif %}
+      {% endfor %}
+
+      {% set q_next = q.copy() %}{% set _ = q_next.update({'page': next}) %}
+      <a class="page-btn" href="{{ url_for('admin_log_view', **q_next) }}">Next</a>
+    </div>
+  {% endif %}
+</div>
+
+<style>
+/* ---------- Page shell ---------- */
+.logs-wrap { max-width: 1100px; margin: 0 auto; }
+.page-title { color:#2b3a38; margin:8px 0 16px; }
+
+/* ---------- Cards ---------- */
+.card{
+  background:#fff; border:1px solid #e7ebee; border-radius:10px;
+  padding:14px 16px; margin-bottom:14px;
+}
+
+/* ---------- Filter rows ---------- */
+.filters .row, .range-clear .row{
+  display:flex; flex-wrap:wrap; gap:12px 14px; align-items:end;
+}
+.field{ display:flex; flex-direction:column; gap:6px; min-width:170px; }
+.field label{ font-size:13px; color:#556; font-weight:600; }
+.field input, .field select{
+  padding:8px 10px; border:1px solid #d3d9de; border-radius:8px; outline:none; font-size:14px;
+  background:#fff;
+}
+.field input:focus, .field select:focus{ border-color:#397d6c; box-shadow:0 0 0 3px rgba(57,125,108,.12); }
+
+.actions{ display:flex; gap:8px; margin-left:auto; }
+
+/* ---------- Buttons ---------- */
+.btn{ cursor:pointer; border:1px solid transparent; border-radius:8px; padding:8px 12px; font-weight:600; font-size:14px; }
+.btn-primary{ background:#397d6c; color:#fff; }
+.btn-ghost{ background:#f5f7f8; color:#2b3a38; border-color:#e1e6ea; }
+.btn-danger{ background:#d9534f; color:#fff; }
+.btn-link{ background:transparent; border:none; color:#397d6c; padding:0; font-weight:600; }
+.btn:hover{ opacity:.95; }
+
+/* ---------- Flashes ---------- */
+.flash-stack{ margin-bottom:12px; }
+.flash{ padding:10px 12px; border-radius:8px; font-size:14px; }
+.flash.success{ background:#ecf8f3; color:#245d4e; border:1px solid #cbe9de; }
+.flash.error{ background:#fdecea; color:#933; border:1px solid #f6c4c0; }
+.flash.info{ background:#eef5ff; color:#2f4e88; border:1px solid #cfe0ff; }
+
+/* ---------- Table ---------- */
+.table-card{ padding:0; overflow:hidden; }
+.table{ width:100%; border-collapse:separate; border-spacing:0; font-size:14px; }
+.table thead th{
+  text-align:left; background:#f7faf9; color:#334; font-weight:700; padding:12px 14px;
+  border-bottom:1px solid #e7ebee;
+}
+.table tbody td{ padding:12px 14px; border-bottom:1px solid #f0f2f4; vertical-align:top; }
+.table tbody tr:nth-child(even) td{ background:#fcfdfd; }
+.uid-link{ color:#2b3a38; text-decoration:none; border-bottom:1px dashed #b8c4c4; }
+.uid-link:hover{ color:#397d6c; border-bottom-color:#397d6c; }
+
+.muted{ color:#7a858e; }
+.mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+.tag{
+  background:#eef5f3; color:#2c6a5a; border:1px solid #d7e8e3; padding:2px 8px; border-radius:999px; font-size:12px;
+}
+
+/* ---------- Detail rows ---------- */
+.details td{ background:#fbfdfc; }
+.details-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+.pill{
+  background:#e9f3ef; color:#2c6a5a; border:1px solid #cfe3dc; padding:2px 8px; border-radius:999px; font-size:12px;
+}
+.subtable{
+  width:100%; border-collapse:separate; border-spacing:0; margin-top:6px; font-size:13px;
+  border:1px solid #e7ebee; border-radius:8px; overflow:hidden;
+}
+.subtable thead th{ background:#f7faf9; padding:8px 10px; color:#334; }
+.subtable tbody td{ padding:8px 10px; border-top:1px solid #f0f2f4; }
+
+/* two-column layout inside details */
+.two-col{ display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:8px; }
+.stack-space{ margin-top:12px; }
+
+/* ---------- Pagination ---------- */
+.pagination{
+  display:flex; flex-wrap:wrap; gap:8px; justify-content:center; align-items:center; margin-top:14px;
+}
+.page-btn{
+  display:inline-block; padding:6px 10px; border:1px solid #e1e6ea; border-radius:8px; text-decoration:none; color:#2b3a38;
+  background:#fff; min-width:32px; text-align:center;
+}
+.page-btn:hover{ border-color:#397d6c; }
+.page-btn.active{ background:#397d6c; color:#fff; border-color:#397d6c; }
+
+/* ---------- Responsive ---------- */
+@media (max-width: 820px){
+  .field{ min-width:140px; flex:1; }
+  .actions{ width:100%; justify-content:flex-end; }
+  .two-col{ grid-template-columns:1fr; }
+}
+</style>
+
+<script>
+  function toggleDetails(id){
+    var row = document.getElementById(id);
+    if(!row) return;
+    row.style.display = (row.style.display === 'none' || row.style.display === '') ? 'table-row' : 'none';
+    const btn = row.previousElementSibling.querySelector('button.btn-link');
+    if(btn){
+      btn.textContent = row.style.display === 'table-row' ? 'Hide details ▲' : 'View details ▼';
+    }
+  }
+</script>
+{% endblock %}

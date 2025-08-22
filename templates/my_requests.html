@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}My Stock Change Requests{% endblock %}
+
+{% block content %}
+<h2>My Submitted Requests</h2>
+
+<!-- Filter Form -->
+<form method="GET" action="{{ url_for('my_requests') }}" style="margin-bottom: 15px;">
+    <label for="status">Filter by Status:</label>
+    <select name="status" id="status" onchange="this.form.submit()">
+        <option value="all" {% if status_filter == "all" %}selected{% endif %}>All</option>
+        <option value="pending" {% if status_filter == "pending" %}selected{% endif %}>Pending</option>
+        <option value="approved" {% if status_filter == "approved" %}selected{% endif %}>Approved</option>
+        <option value="declined" {% if status_filter == "declined" %}selected{% endif %}>Declined</option>
+        <option value="cancelled" {% if status_filter == "cancelled" %}selected{% endif %}>Cancelled</option>
+    </select>
+</form>
+
+<!-- Clear by Date Range -->
+<form method="POST" action="{{ url_for('clear_my_requests_range') }}" style="margin-bottom: 20px;"
+      onsubmit="return confirm('Delete all your requests in this date range? This cannot be undone.');">
+    <label>Clear Requests from:</label>
+    <input type="date" name="start_date" required>
+    <label>to</label>
+    <input type="date" name="end_date" required>
+    <button type="submit" style="background-color: #cc0000; color: white;">Clear Range</button>
+</form>
+
+{% if requests %}
+    <table style="width:100%; border-collapse: collapse; background-color: #fff;">
+        <thead>
+            <tr style="background-color:#f2f2f2;">
+                <th style="border: 1px solid #aaa; padding: 8px;">UID</th>
+                <th style="border: 1px solid #aaa; padding: 8px;">Product Name</th>
+                <th style="border: 1px solid #aaa; padding: 8px;">Location</th>
+                <th style="border: 1px solid #aaa; padding: 8px;">Quantity Change</th>
+                <th style="border: 1px solid #aaa; padding: 8px;">Status</th>
+                <th style="border: 1px solid #aaa; padding: 8px;">Time</th>
+                <th style="border: 1px solid #aaa; padding: 8px;">Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in requests %}
+            <tr>
+                <td style="border: 1px solid #aaa; padding: 8px;">{{ r.uid }}</td>
+                <td style="border: 1px solid #aaa; padding: 8px;">{{ r.name }}</td>
+                <td style="border: 1px solid #aaa; padding: 8px;">{{ r.location }}</td>
+                <td style="border: 1px solid #aaa; padding: 8px;">{{ r.change }}</td>
+                <td style="border: 1px solid #aaa; padding: 8px;">
+                    {% if r.status == "approved" %}
+                        <span style="color: green; font-weight: bold;">✅ Approved</span>
+                    {% elif r.status == "declined" %}
+                        <span style="color: red; font-weight: bold;">❌ Declined</span>
+                    {% elif r.status == "cancelled" %}
+                        <span style="color: gray; font-weight: bold;">🚫 Cancelled</span>
+                    {% else %}
+                        <span style="color: orange; font-weight: bold;">⏳ Pending</span>
+                    {% endif %}
+                </td>
+                <td style="border: 1px solid #aaa; padding: 8px;">
+                    {{ r.timestamp.strftime("%Y-%m-%d %H:%M") }}
+                    {% if r.processed_at %}
+                        <br><small style="color:gray;">Updated: {{ r.processed_at.strftime("%Y-%m-%d %H:%M") }}</small>
+                    {% endif %}
+                </td>
+                <td style="border: 1px solid #aaa; padding: 8px;">
+                    {% if r.status == "declined" %}
+                        <form method="GET" action="{{ url_for('edit_request', submission_id=r._id) }}" style="margin-bottom: 5px;">
+                            <button type="submit">Edit &amp; Resubmit</button>
+                        </form>
+                    {% elif r.status == "pending" %}
+                        <form method="POST" action="{{ url_for('cancel_request', submission_id=r._id) }}" onsubmit="return confirm('Cancel this pending request?');">
+                            <button type="submit" style="background-color: #ff6666; color: white;">Cancel</button>
+                        </form>
+                    {% else %}
+                        <span style="color: gray;">No Action</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% else %}
+    <p>You have not submitted any stock change requests yet.</p>
+{% endif %}
+{% endblock %}

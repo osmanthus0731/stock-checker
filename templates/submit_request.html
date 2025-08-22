@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Submit Stock Change Request</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            display: flex;
+            background-color: #f8f8f8;
+        }
+
+        .sidebar {
+            width: 220px;
+            background-color: #397d6c;
+            color: white;
+            height: 100vh;
+            position: fixed;
+            top: 0;
+            left: 0;
+            padding-top: 20px;
+        }
+
+        .sidebar a {
+            padding: 12px 20px;
+            display: block;
+            color: white;
+            text-decoration: none;
+            font-weight: bold;
+        }
+
+        .sidebar a:hover {
+            background-color: #2f6d5f;
+        }
+
+        .main-content {
+            margin-left: 220px;
+            padding: 20px;
+            width: calc(100% - 220px);
+        }
+
+        section {
+            background-color: #ffffff;
+            padding: 20px;
+            border-radius: 5px;
+            max-width: 500px;
+        }
+
+        input[type="number"], button {
+            width: 100%;
+            padding: 10px;
+            margin-top: 10px;
+            margin-bottom: 20px;
+        }
+
+        h2 {
+            margin-top: 0;
+        }
+
+        label {
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<!-- Sidebar -->
+<div class="sidebar">
+    <h2 style="text-align:center;">Menu</h2>
+
+    {% if session['role'] == 'admin' %}
+        <a href="{{ url_for('admin_dashboard') }}">Dashboard</a>
+        <a href="{{ url_for('search_admin') }}">Search</a>
+        <a href="{{ url_for('requests_page') }}">Requests</a>
+    {% elif session['role'] == 'worker' %}
+        <a href="{{ url_for('index') }}">Dashboard</a>
+        <a href="{{ url_for('search_worker') }}">Search</a>
+        <a href="{{ url_for('my_requests') }}">My Requests</a>
+    {% endif %}
+
+    <a href="{{ url_for('logout') }}" onclick="return confirm('Are you sure you want to logout?')">Logout</a>
+</div>
+
+
+<!-- Main Content -->
+<div class="main-content">
+    <section>
+        <h2>Submit Stock Change Request</h2>
+        <p><strong>Product:</strong> {{ product.name }}</p>
+        <p><strong>UID:</strong> {{ product.uid }}</p>
+        <p><strong>Location:</strong> {{ location }}</p>
+        <form method="POST">
+            <label for="change">Quantity Change (e.g. -5, +10):</label>
+            <input type="number" name="change" required>
+            <button type="submit">Submit Request</button>
+        </form>
+    </section>
+</div>
+
+</body>
+</html>

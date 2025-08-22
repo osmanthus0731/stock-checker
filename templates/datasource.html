@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Admin · Data Source{% endblock %}
+{% block content %}
+<div class="card" style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;max-width:1100px;margin:0 auto;">
+  <h2 style="margin:0 0 10px;">Data Source & Live Sync</h2>
+  <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;">
+    <div><strong>Total products:</strong> {{ total }}</div>
+    <div><strong>Last sync write:</strong> {% if last and last.updated_at %}{{ last.updated_at }} UTC{% else %}<em>—</em>{% endif %}</div>
+    <div><strong>Interval:</strong> every {{ sync_seconds }}s</div>
+  </div>
+  <div style="margin-top:12px;">
+    <form method="post" action="{{ url_for('admin_sync_now') }}" style="display:inline;">
+      <button class="btn">Sync Now</button>
+    </form>
+    <form method="post" action="{{ url_for('admin_purge_tests') }}" style="display:inline;margin-left:8px"
+          onsubmit="return confirm('Remove test products now? This cannot be undone.');">
+      <button class="btn danger">Purge Test Data</button>
+    </form>
+  </div>
+  <p style="margin-top:12px;color:#6b7280;">Fields mapped: Part_id→UID, Desc→Product Name, Mssid→Readable ID, Stock_office→Stock, Loc_film_box→Location A, StockA→Stock in Location A, Loc_wh→Location B, StockB→Stock in Location B.</p>
+</div>
+{% endblock %}

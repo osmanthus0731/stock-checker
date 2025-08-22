@@ -1,0 +1,111 @@
+{% extends "index.html" %}
+{% block title %}Search{% endblock %}
+
+{% block content %}
+<h1>Search</h1>
+
+<form method="post" class="row" style="margin:10px 0 16px; gap:10px;">
+  <input name="search_uid" placeholder="Search by UID/Name/MSSID…" style="min-width:260px"/>
+
+  <label>Category</label>
+  <select name="filter_category">
+    <option value="All">All</option>
+    {% for c in categories %}
+      {% if c != 'All' %}
+        <option value="{{ c }}">{{ c }}</option>
+      {% endif %}
+    {% endfor %}
+  </select>
+
+  <label>Volume</label>
+  <select name="volume">
+    <option value="">Any</option>
+    {% for v in volumes %}
+      <option value="{{ v }}">{{ v }} ml</option>
+    {% endfor %}
+  </select>
+
+  <!-- NEW: Pict filter -->
+  <label>Pict</label>
+  <select name="pict">
+    <option value="">Any</option>
+    {% for pv in pict_values %}
+      <option value="{{ pv }}">{{ pv }}</option>
+    {% endfor %}
+  </select>
+
+  <button class="btn" type="submit">Search</button>
+</form>
+
+{% if message %}
+  <div class="flash info">{{ message }}</div>
+{% endif %}
+
+{% if result and result|length %}
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>UID</th>
+        <th>Name</th>
+        <th>MSSID</th>
+        <th>Category</th>
+        <th>Pict</th> <!-- NEW -->
+        <th>Volume</th>
+        <th>Locations</th>
+        <th style="width:140px;">QR</th>
+        <th style="width:120px;">Pricing</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in result %}
+      <tr>
+        <td>{{ p.uid }}</td>
+        <td>{{ p.name }}</td>
+        <td>{{ p.readable_id }}</td>
+        <td>{{ p.category }}</td>
+        <td>{{ p.pict if p.pict is not none else '—' }}</td>
+        <td>{{ p.volume_ml if p.volume_ml else '—' }}</td>
+        <td>
+          {% if p.locations %}
+            {% for L in p.locations %}
+              <span style="display:inline-block;background:#eef2ff;border:1px solid #e5e7eb;padding:4px 8px;border-radius:10px;margin-right:6px;margin-bottom:4px;">
+                {{ L.area }}: <strong>{{ L.quantity }}</strong>
+              </span>
+            {% endfor %}
+          {% else %} — {% endif %}
+        </td>
+        <td>
+          <button class="btn" type="button" onclick="toggleQR('{{ p.uid }}')">QR</button>
+          <div id="qrwrap-{{ p.uid }}" style="display:none;margin-top:8px;"></div>
+        </td>
+        <td>
+          <a class="btn" href="{{ url_for('view_pricing', uid=p.uid) }}">View</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<script>
+  function toggleQR(uid){
+    const wrap = document.getElementById('qrwrap-' + uid);
+    if(!wrap) return;
+    const visible = wrap.style.display === 'block';
+    if(visible){ wrap.style.display = 'none'; return; }
+    if(!wrap.querySelector('img')){
+      const img = document.createElement('img');
+      img.width = 96; img.height = 96;
+      img.style.display = 'block';
+      img.style.border = '1px solid #eee';
+      img.style.borderRadius = '8px';
+      img.loading = 'lazy';
+      img.src = "{{ url_for('qr', uid='__UID__') }}".replace('__UID__', uid);
+      wrap.appendChild(img);
+    }
+    wrap.style.display = 'block';
+  }
+</script>
+{% endblock %}

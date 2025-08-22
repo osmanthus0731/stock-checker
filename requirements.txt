@@ -1,0 +1,19 @@
+# Core web + server
+Flask==3.0.3
+gunicorn==22.0.0
+python-dotenv==1.0.1
+
+# Database
+pymongo[srv]==4.8.0
+certifi==2024.8.30
+
+# QR codes
+qrcode==7.4.2
+Pillow==10.3.0
+
+# Schedulers (optional; harmless if unused)
+APScheduler==3.10.4
+
+# Only install pyodbc on Windows to avoid Linux build issues
+pyodbc==5.1.0; platform_system == "Windows"
+pypyodbc==1.3.6; platform_python_implementation == "PyPy"

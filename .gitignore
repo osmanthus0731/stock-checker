@@ -1,0 +1,11 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+*.sqlite
+*.db
+*.log
+instance/
+static/qr_codes/*.png
+.vercel

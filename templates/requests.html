@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Pending Stock Requests{% endblock %}
+
+{% block content %}
+<h2>Pending Stock Change Requests</h2>
+
+{% if submissions %}
+    <table style="width:100%; border-collapse: collapse; background-color: #fff;">
+        <thead>
+            <tr style="background-color:#f2f2f2;">
+                <th style="border: 1px solid #aaa; padding: 8px;">UID</th>
+                <th style="border: 1px solid #aaa; padding: 8px;">Product Name</th>
+                <th style="border: 1px solid #aaa; padding: 8px;">Location</th>
+                <th style="border: 1px solid #aaa; padding: 8px;">Quantity Change</th>
+                <th style="border: 1px solid #aaa; padding: 8px;">Submitted By</th>
+                <th style="border: 1px solid #aaa; padding: 8px;">Timestamp</th>
+                <th style="border: 1px solid #aaa; padding: 8px;">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in submissions %}
+            <tr>
+                <td style="border: 1px solid #aaa; padding: 8px;">{{ r.uid }}</td>
+                <td style="border: 1px solid #aaa; padding: 8px;">{{ r.name }}</td>
+                <td style="border: 1px solid #aaa; padding: 8px;">{{ r.location }}</td>
+                <td style="border: 1px solid #aaa; padding: 8px;">{{ r.change }}</td>
+                <td style="border: 1px solid #aaa; padding: 8px;">{{ r.submitted_by }}</td>
+                <td style="border: 1px solid #aaa; padding: 8px;">
+                    {{ r.timestamp.strftime("%Y-%m-%d %H:%M") }}
+                </td>
+                <td style="border: 1px solid #aaa; padding: 8px;">
+                    <form method="POST" action="{{ url_for('approve_request', submission_id=r._id) }}" style="display:inline;">
+                        <button type="submit">Approve</button>
+                    </form>
+                    <form method="POST" action="{{ url_for('decline_request', submission_id=r._id) }}" style="display:inline;" onsubmit="return confirm('Are you sure to decline this request?');">
+                        <button type="submit">Decline</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% else %}
+    <p>No pending requests found.</p>
+{% endif %}
+{% endblock %}

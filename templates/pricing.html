@@ -1,0 +1,46 @@
+{% extends "index.html" %}
+{% block title %}Pricing — {{ prices.uid }}{% endblock %}
+
+{% block content %}
+<h1>Pricing</h1>
+
+<div class="card" style="margin-bottom:16px">
+  <div style="font-size:18px;font-weight:700">{{ prices.name or 'Unnamed' }}</div>
+  <div class="muted">Part-ID: <strong>{{ prices.uid }}</strong></div>
+</div>
+
+{% if prices.error %}
+  <div class="flash error">Could not read pricing table ({{ prices.error }}).</div>
+{% endif %}
+
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>Tier</th>
+        <th>Purchasing (P)</th>
+        <th>Selling (S)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for tier in ["S12","S100","S500","1K","3K","5K","10K"] %}
+      <tr>
+        <td>{{ tier }}</td>
+        <td>
+          {% set v = prices.P.get(tier) %}
+          {{ '—' if v is none else ('%.2f'|format(v)) }}
+        </td>
+        <td>
+          {% set v = prices.S.get(tier) %}
+          {{ '—' if v is none else ('%.2f'|format(v)) }}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div style="margin-top:14px">
+  <a class="btn" href="{{ url_for('admin_dashboard' if session.get('role')=='admin' else 'index') }}">Back</a>
+</div>
+{% endblock %}
