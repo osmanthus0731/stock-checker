@@ -1,31 +1,19 @@
-# app.py — Read-only inventory from MS Access, users in MongoDB (data:text/plain QR)
-#          + Pricing view (Cus_Price exact match on Part_id via Pricecd=P/S)
+# app.py — Read-only inventory from MS Access (local Windows), users + fallback data in MongoDB (cloud)
+#          + Pricing view (Cus_Price exact match on Part_id via Pricecd=P/S) — disabled when Access unavailable
 #          + Smooth caching, lazy QR, single-row lookup, Category + Volume + Pict filters
 #          + /debug_pricing/<uid> diagnostic endpoint
+#          + Cloud-safe: auto-fallback to Mongo when Access not available (Linux/Render)
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
     session, flash, send_file, abort
 )
-from pymongo import MongoClient
+from pymongo import MongoClient, ASCENDING
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 from dotenv import load_dotenv
 from io import BytesIO
 import os, qrcode, certifi, base64, time, re
-
-# ---------------- ODBC (pyodbc preferred, fallback to pypyodbc) ----------------
-ODBC_LIB = None
-try:
-    import pyodbc as _odbc
-    ODBC_LIB = "pyodbc"
-except Exception:
-    try:
-        import pypyodbc as _odbc
-        ODBC_LIB = "pypyodbc"
-    except Exception:
-        _odbc = None
-        ODBC_LIB = None
 
 load_dotenv()
 
@@ -33,7 +21,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = os.getenv("FLASK_SECRET", "dev-secret")
 IS_VERCEL = os.getenv("VERCEL") == "1"
 
-# ---------------- Mongo (users only) ----------------
+# ---------------- Mongo (users + optional products) ----------------
 MONGO_URI = os.getenv("MONGO_URI") or os.getenv("MONGO_URL")
 if not MONGO_URI:
     raise RuntimeError("MONGO_URI not set")
@@ -43,16 +31,35 @@ if MONGO_URI.startswith("mongodb+srv://") or "mongodb.net" in MONGO_URI:
 client = MongoClient(MONGO_URI, **_tls)
 db = client[os.getenv("MONGO_DB", "inventory")]
 users = db["users"]
+products_col = db.get_collection("products")  # optional, used for Mongo fallback
+admin_logs = db.get_collection("admin_logs")  # optional
+submissions = db.get_collection("submissions")  # optional
 
 # ---------------- Access config ----------------
 ACCESS_DB_PATH     = (os.getenv("ACCESS_DB_PATH") or "").strip()
 ACCESS_TABLE       = (os.getenv("ACCESS_TABLE") or "ITMMST").strip()
 ACCESS_PRICE_TABLE = (os.getenv("ACCESS_PRICE_TABLE") or "Cus_Price").strip()
+FORCE_MONGO_ONLY   = os.getenv("FORCE_MONGO_ONLY", "0") == "1"
+
+# ---------------- ODBC (pyodbc preferred, fallback to pypyodbc) ----------------
+ODBC_LIB = None
+_odbc = None
+if not FORCE_MONGO_ONLY:
+    try:
+        import pyodbc as _odbc
+        ODBC_LIB = "pyodbc"
+    except Exception:
+        try:
+            import pypyodbc as _odbc
+            ODBC_LIB = "pypyodbc"
+        except Exception:
+            _odbc = None
+            ODBC_LIB = None
 
 # ---------------- Paging ----------------
 ITEMS_PER_PAGE = 5
 
-# ---------------- Simple in-process cache ----------------
+# ---------------- Simple in-process cache (Access path) ----------------
 _PRODUCTS_CACHE = {"ts": 0.0, "data": []}
 CACHE_TTL_SEC = 60
 
@@ -75,12 +82,18 @@ def role_required(*roles):
         return inner
     return wrap
 
+# ---------------- Access availability ----------------
+def _should_use_access():
+    """Use Access only when explicitly available on Windows with a real file and ODBC."""
+    if FORCE_MONGO_ONLY:
+        return False
+    path = ACCESS_DB_PATH
+    return (os.name == "nt") and bool(path) and os.path.exists(path) and (_odbc is not None)
+
 # ---------------- Access helpers ----------------
 def _access_conn():
-    if not (ACCESS_DB_PATH and os.path.exists(ACCESS_DB_PATH)):
-        raise RuntimeError(f"ACCESS_DB_PATH not found: {ACCESS_DB_PATH}")
-    if not _odbc:
-        raise RuntimeError("No ODBC library available. Try: pip install pypyodbc")
+    if not _should_use_access():
+        raise RuntimeError("Access not available in this environment")
     conn_str = (
         r"DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};"
         rf"DBQ={ACCESS_DB_PATH};"
@@ -132,7 +145,7 @@ def _map_row(row):
     mssid = (g("Mssid","mssid","MSSID") or "").strip()
     cat   = g("Cat","cat","Category") or "Uncategorized"
 
-    # NEW: Pict field (numeric, not an image)
+    # Pict field (numeric, not an image)
     pict  = _to_int_safe(g("Pict","pict","PICT"), default=None)
 
     loc_a = (g("Loc_film_box","loc_film_box","LocA") or "").strip()
@@ -153,8 +166,8 @@ def _map_row(row):
         "name": name,
         "readable_id": mssid,
         "category": cat,
-        "pict": pict,                 # <— NEW
-        "locations": locs,            # list[{area, quantity}]
+        "pict": pict,
+        "locations": locs,   # list[{area, quantity}]
         "stock": total,
         "volume_ml": volume_ml
     }
@@ -176,7 +189,7 @@ def _detect_pk_column():
         if c in cols: return c
     return cols[0] if cols else None
 
-def _get_product_by_uid(uid: str):
+def _get_product_by_uid_access(uid: str):
     pk = _detect_pk_column()
     if not pk: return None
     cn = _access_conn()
@@ -190,20 +203,74 @@ def _get_product_by_uid(uid: str):
     finally:
         cn.close()
 
+# ---------- Mongo fallback helpers ----------
+def _normalize_mongo_product(p: dict) -> dict:
+    """Coerce a Mongo product doc to the same shape used by templates."""
+    out = {
+        "uid": p.get("uid", "") or p.get("Part_id", ""),
+        "name": p.get("name", "") or p.get("Desc", ""),
+        "readable_id": p.get("readable_id", "") or p.get("Mssid", ""),
+        "category": p.get("category", "Uncategorized"),
+        "pict": p.get("pict", None),
+        "stock": p.get("stock"),
+        "volume_ml": p.get("volume_ml")
+    }
+    # locations can be dict or list in some older DBs — normalize to list[{area, quantity}]
+    locs = p.get("locations") or {}
+    if isinstance(locs, dict):
+        out["locations"] = [{"area": k, "quantity": (int(v) if v not in (None, "") else 0)} for k, v in locs.items()]
+    elif isinstance(locs, list):
+        norm = []
+        for L in locs:
+            area = (L.get("area") or L.get("loc") or "").strip()
+            qty  = L.get("quantity")
+            try: qty = int(qty)
+            except: qty = 0
+            if area:
+                norm.append({"area": area, "quantity": qty})
+        out["locations"] = norm
+    else:
+        out["locations"] = []
+    # derive volume_ml if missing
+    if out.get("volume_ml") is None:
+        out["volume_ml"] = _extract_volume_ml(out.get("name", "")) or _extract_volume_ml(out.get("readable_id", ""))
+    # derive stock if missing
+    if out.get("stock") is None:
+        out["stock"] = sum((i.get("quantity") or 0) for i in out["locations"])
+    return out
+
+def _all_products_from_mongo():
+    docs = list(products_col.find({}, {"_id": 0}))
+    return [_normalize_mongo_product(p) for p in docs]
+
+def _get_product_by_uid_mongo(uid: str):
+    p = products_col.find_one({"uid": uid}, {"_id": 0})
+    if not p:
+        p = products_col.find_one({"Part_id": uid}, {"_id": 0})
+    return _normalize_mongo_product(p) if p else None
+
+# Wrapper that chooses Access (if available) or Mongo
+def _all_products():
+    return _all_products_from_access() if _should_use_access() else _all_products_from_mongo()
+
+def _get_product_by_uid(uid: str):
+    return _get_product_by_uid_access(uid) if _should_use_access() else _get_product_by_uid_mongo(uid)
+
 # ---------- PRICE lookup (Cus_Price, EXACT MATCH using Pricecd=P/S) ----------
-def _get_prices_for_part(part_id: str):
+def _get_prices_for_part(uid: str):
     """
-    Exact pricing by Part_id (trimmed) from Cus_Price.
-    Uses Pricecd to split rows into P (Purchasing) and S (Selling).
-    Accepts tier columns case-insensitively: S12, S100, S500, 1k/1K/S1000, 3k/3K/S3000, 5k/5K/S5000, 10k/10K/S10000.
-    Returns: { uid, name, P:{...}, S:{...} }
+    Access-only feature. Returns dict like { uid, name, P:{...}, S:{...} }.
+    When Access is unavailable (cloud), return None so routes can 404.
     """
-    part_id = (part_id or "").strip()
+    if not _should_use_access():
+        return None
+
+    part_id = (uid or "").strip()
     if not part_id: return None
 
     out = {"uid": part_id, "name": "", "P": {}, "S": {}}
 
-    prod = _get_product_by_uid(part_id)
+    prod = _get_product_by_uid_access(part_id)
     if prod: out["name"] = prod.get("name", "")
 
     cn = _access_conn()
@@ -300,7 +367,7 @@ def login():
 def seed_users():
     users.delete_many({})
     users.insert_many([
-        {"username":"admin1","password":generate_password_hash("adminpass"),"role":"admin"},
+        {"username":"admin","password":generate_password_hash("adminpass"),"role":"admin"},
         {"username":"worker1","password":generate_password_hash("workerpass"),"role":"worker"},
     ])
     return "seeded"
@@ -320,17 +387,17 @@ def qr(uid: str):
     buf = BytesIO(); img.save(buf, format="PNG"); buf.seek(0)
     return send_file(buf, mimetype="image/png", download_name=f"{uid}.png")
 
-# ---------------- Inventory context (cached) ----------------
-def _inventory_ctx_from_access():
-    products_all = list(_all_products_from_access())
-
+# ---------------- Inventory context builder (shared) ----------------
+def _filter_sort_paginate(products_all):
     selected_cat  = (request.values.get("filter_category") or "All").strip()
     selected_vol  = (request.values.get("volume") or "").strip()
-    selected_pict = (request.values.get("pict") or "").strip()   # <— NEW
+    selected_pict = (request.values.get("pict") or "").strip()
 
+    # category
     if selected_cat and selected_cat != "All":
-        products_all = [p for p in products_all if (p["category"] or "Uncategorized") == selected_cat]
+        products_all = [p for p in products_all if (p.get("category") or "Uncategorized") == selected_cat]
 
+    # volume exact match
     if selected_vol:
         try:
             v = int(selected_vol)
@@ -338,19 +405,15 @@ def _inventory_ctx_from_access():
         except Exception:
             pass
 
-    if selected_pict:  # exact value filter for Pict
+    # pict exact match
+    if selected_pict:
         try:
             pv = int(selected_pict)
             products_all = [p for p in products_all if (p.get("pict") is not None and p.get("pict") == pv)]
         except Exception:
-            # ignore if non-numeric
             pass
 
-    cats = sorted({p["category"] or "Uncategorized" for p in _all_products_from_access()})
-    vols = sorted({p["volume_ml"] for p in _all_products_from_access() if p.get("volume_ml")})
-    vols = [int(x) for x in vols]
-    pict_values = sorted({p["pict"] for p in _all_products_from_access() if p.get("pict") is not None})  # <— NEW
-
+    # pagination
     page = request.args.get("page", 1, type=int)
     total_items = len(products_all)
     total_pages = max(1, (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
@@ -358,6 +421,7 @@ def _inventory_ctx_from_access():
     start, end = (page-1)*ITEMS_PER_PAGE, page*ITEMS_PER_PAGE
     paginated = products_all[start:end]
 
+    # page window
     window = 5
     half = window // 2
     start_p = max(1, page - half)
@@ -365,14 +429,24 @@ def _inventory_ctx_from_access():
     start_p = max(1, end_p - window + 1)
     pages = list(range(start_p, end_p + 1))
 
+    return paginated, total_items, total_pages, pages, page
+
+def _inventory_ctx_from_access():
+    products_all = list(_all_products_from_access())
+    paginated, total_items, total_pages, pages, page = _filter_sort_paginate(products_all)
+
+    cats = sorted({p.get("category") or "Uncategorized" for p in products_all})
+    vols = sorted({int(p["volume_ml"]) for p in products_all if p.get("volume_ml")})
+    pict_values = sorted({p["pict"] for p in products_all if p.get("pict") is not None})
+
     return {
         "products": paginated,
         "categories": ["All"] + cats,
         "volumes": vols,
-        "pict_values": pict_values,                 # <— NEW
-        "selected_category": selected_cat or "All",
-        "selected_volume": selected_vol,
-        "selected_pict": selected_pict,             # <— NEW
+        "pict_values": pict_values,
+        "selected_category": (request.values.get("filter_category") or "All").strip(),
+        "selected_volume": (request.values.get("volume") or "").strip(),
+        "selected_pict": (request.values.get("pict") or "").strip(),
         "page": page,
         "total_pages": total_pages,
         "pages": pages,
@@ -380,30 +454,58 @@ def _inventory_ctx_from_access():
         "total_items": total_items,
     }
 
+def _inventory_ctx_from_mongo():
+    products_all = list(_all_products_from_mongo())
+    paginated, total_items, total_pages, pages, page = _filter_sort_paginate(products_all)
+
+    cats = sorted({p.get("category") or "Uncategorized" for p in products_all})
+    vols = sorted({int(p["volume_ml"]) for p in products_all if p.get("volume_ml")})
+    pict_values = sorted({p["pict"] for p in products_all if p.get("pict") is not None})
+
+    return {
+        "products": paginated,
+        "categories": ["All"] + cats,
+        "volumes": vols,
+        "pict_values": pict_values,
+        "selected_category": (request.values.get("filter_category") or "All").strip(),
+        "selected_volume": (request.values.get("volume") or "").strip(),
+        "selected_pict": (request.values.get("pict") or "").strip(),
+        "page": page,
+        "total_pages": total_pages,
+        "pages": pages,
+        "per_page": ITEMS_PER_PAGE,
+        "total_items": total_items,
+    }
+
+def _inventory_ctx():
+    return _inventory_ctx_from_access() if _should_use_access() else _inventory_ctx_from_mongo()
+
 # ---------------- Pricing page + debug ----------------
 @app.route("/pricing/<uid>")
 @login_required
 def view_pricing(uid):
     prices = _get_prices_for_part(uid)
-    if not prices: abort(404)
+    if not prices:
+        flash("Pricing view requires Access and is not available in the cloud build.", "info")
+        return redirect(url_for("admin_dashboard") if session.get("role")=="admin" else url_for("index"))
     return render_template("pricing.html", prices=prices)
 
 @app.route("/debug_pricing/<uid>")
 @login_required
 def debug_pricing(uid):
-    # Flask will JSONify dicts by default
-    return _get_prices_for_part(uid) or {"ok": False, "msg": "no data"}
+    prices = _get_prices_for_part(uid)
+    return prices or {"ok": False, "msg": "pricing requires Access (local Windows only)"}
 
 # ---------------- Dashboards ----------------
 @app.route("/admin_dashboard", methods=["GET","POST"])
 @role_required("admin")
 def admin_dashboard():
-    return render_template("admin_dashboard.html", role="admin", **_inventory_ctx_from_access())
+    return render_template("admin_dashboard.html", role="admin", **_inventory_ctx())
 
 @app.route("/index", methods=["GET","POST"])
 @role_required("worker")
 def index():
-    return render_template("index.html", role="worker", **_inventory_ctx_from_access())
+    return render_template("index.html", role="worker", **_inventory_ctx())
 
 # ---------------- Read-only stubs ----------------
 @app.route("/update_stock/<uid>", methods=["GET","POST"])
@@ -451,38 +553,41 @@ def _render_search(role):
         selected_vol  = (request.form.get("volume") or "").strip()
         selected_pict = (request.form.get("pict") or "").strip()
 
-        if q or selected_cat != "All" or selected_vol or selected_pict:
-            rows = _all_products_from_access()
-            if q:
-                keys = q.split()
-                rows = [
-                    p for p in rows
-                    if all(k in " ".join([p.get("uid",""), p.get("name",""), p.get("readable_id","")]).lower()
-                           for k in keys)
-                ]
-            if selected_cat != "All":
-                rows = [p for p in rows if (p["category"] or "Uncategorized") == selected_cat]
-            if selected_vol:
-                try:
-                    v = int(selected_vol)
-                    rows = [p for p in rows if p.get("volume_ml") == v]
-                except Exception:
-                    pass
-            if selected_pict:
-                try:
-                    pv = int(selected_pict)
-                    rows = [p for p in rows if (p.get("pict") is not None and p.get("pict") == pv)]
-                except Exception:
-                    pass
+        rows = _all_products()
+        if q:
+            keys = q.split()
+            rows = [
+                p for p in rows
+                if all(k in " ".join([
+                        p.get("uid",""),
+                        p.get("name",""),
+                        p.get("readable_id","")
+                    ]).lower() for k in keys)
+            ]
+        if selected_cat != "All":
+            rows = [p for p in rows if (p.get("category") or "Uncategorized") == selected_cat]
+        if selected_vol:
+            try:
+                v = int(selected_vol)
+                rows = [p for p in rows if p.get("volume_ml") == v]
+            except Exception:
+                pass
+        if selected_pict:
+            try:
+                pv = int(selected_pict)
+                rows = [p for p in rows if (p.get("pict") is not None and p.get("pict") == pv)]
+            except Exception:
+                pass
 
-            result = rows
-            if not result:
-                message = "No matching products found."
+        result = rows
+        if not result:
+            message = "No matching products found."
 
-    cats = sorted({p["category"] or "Uncategorized" for p in _all_products_from_access()})
-    vols = sorted({p["volume_ml"] for p in _all_products_from_access() if p.get("volume_ml")})
-    vols = [int(x) for x in vols]
-    pict_values = sorted({p["pict"] for p in _all_products_from_access() if p.get("pict") is not None})
+    # build filter lists from the same source
+    all_rows = _all_products()
+    cats = sorted({p.get("category") or "Uncategorized" for p in all_rows})
+    vols = sorted({int(p["volume_ml"]) for p in all_rows if p.get("volume_ml")})
+    pict_values = sorted({p["pict"] for p in all_rows if p.get("pict") is not None})
 
     return render_template(
         "search.html",
