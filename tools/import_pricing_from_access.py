@@ -1,9 +1,17 @@
 # tools/import_pricing_from_access.py
-import os, re, sys
+# Robust Access -> Mongo importer for pricing
+# - Normalizes Access column names (spaces/underscores/case)
+# - Migrates legacy 'priced' -> 'pricecd'
+# - Safe unique index creation on (part_id, pricecd) without conflicts
+# - DOES NOT skip rows with all-null price tiers (keeps every product row)
+# - Prefers newer eff_date on upsert
+
+import os, re
 from datetime import datetime, date
 from decimal import Decimal
 from dotenv import load_dotenv
 from pymongo import MongoClient, ASCENDING
+from pymongo.errors import OperationFailure
 
 load_dotenv()
 
@@ -18,6 +26,8 @@ ACCESS_CONN_STR    = os.getenv("ACCESS_CONN_STR")
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB  = os.getenv("MONGO_DB",  "inventory")
+
+TIER_KEYS = ("S12","S100","S500","1K","3K","5K","10K")
 
 # ---------- helpers ----------
 def nz(s):
@@ -37,7 +47,6 @@ def to_date(x):
     if x in (None, "", "NULL"): return None
     if isinstance(x, datetime): return x
     if isinstance(x, date): return datetime(x.year, x.month, x.day)
-    # try parse common formats
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
         try:
             return datetime.strptime(str(x), fmt)
@@ -46,7 +55,7 @@ def to_date(x):
     return None
 
 def normalize_key(k: str) -> str:
-    # Uppercase, strip non-alphanumerics: "S 100" -> "S100", "Eff Date" -> "EFFDATE"
+    # "S 100" -> "S100", "Eff Date" -> "EFFDATE", "price_cd" -> "PRICECD"
     return re.sub(r"[^A-Za-z0-9]+", "", k or "").upper()
 
 def access_connect():
@@ -59,10 +68,30 @@ def access_connect():
         rf"DBQ={ACCESS_DB_PATH};READONLY=TRUE;"
     )
 
+def ensure_unique_index(coll):
+    """Ensure unique compound index on (part_id, pricecd) without throwing if it exists."""
+    wanted_name = "part_id_1_pricecd_1"
+    info = coll.index_information()
+    if wanted_name not in info:
+        try:
+            coll.create_index([("part_id", ASCENDING), ("pricecd", ASCENDING)],
+                              name=wanted_name, unique=True)
+        except OperationFailure as e:
+            # If another process created it concurrently, ignore conflict
+            print(f"[info] index create skipped: {getattr(e, 'details', {}) or str(e)}")
+    else:
+        # If it exists but isn't unique, try to replace it
+        if not info[wanted_name].get("unique"):
+            try:
+                coll.drop_index(wanted_name)
+                coll.create_index([("part_id", ASCENDING), ("pricecd", ASCENDING)],
+                                  name=wanted_name, unique=True)
+                print("[fix] replaced non-unique index with unique one")
+            except OperationFailure as e:
+                print(f"[warn] could not replace index: {getattr(e, 'details', {}) or str(e)}")
+
 def migrate_legacy_field(db):
-    """
-    If older docs used `priced` instead of `pricecd`, migrate them once.
-    """
+    """Rename 'priced' to 'pricecd' if any legacy docs exist."""
     res = db["pricing"].update_many(
         {"priced": {"$exists": True}, "pricecd": {"$exists": False}},
         {"$rename": {"priced": "pricecd"}}
@@ -74,7 +103,9 @@ def run():
     client = MongoClient(MONGO_URI)
     db = client[MONGO_DB]
     pricing = db["pricing"]
-    pricing.create_index([("part_id", ASCENDING), ("pricecd", ASCENDING)], unique=True)
+
+    # Make sure the index is present and correct, without crashing if it's already there
+    ensure_unique_index(pricing)
 
     # one-time migration in case previous runs wrote 'priced'
     migrate_legacy_field(db)
@@ -90,15 +121,13 @@ def run():
     print(f"[info] Columns ({len(raw_cols)}): {raw_cols}")
     print(f"[info] Normalized   : {norm_cols}")
 
-    # build fetch rows and normalize keys
     rows = cur.fetchall()
     print(f"[info] Fetched {len(rows)} rows from Access.")
 
     upserts = 0
     examined = 0
 
-    # known keys after normalization
-    # accept several synonyms that often appear in Access schemas
+    # known keys after normalization — include common synonyms seen in Access schemas
     KEYMAP_CANDIDATES = {
         "PART_ID": ("PART_ID", "PARTID", "PART", "PID", "ITEM", "ITEMCODE"),
         "PRICECD": ("PRICECD", "PRICE_CD", "PRICECODE", "PRICE_CODE"),
@@ -161,7 +190,7 @@ def run():
             "eff_date": eff_date,
         }
 
-        # Only set keys that are not None (keeps your docs clean)
+        # Only set keys that are not None (keeps docs clean but still stores rows with all-null tiers)
         set_doc = {k: v for k, v in doc.items() if v is not None}
 
         # Upsert by (part_id, pricecd); prefer newer eff_date
@@ -185,7 +214,7 @@ def run():
     cn.close()
     print(f"[done] Examined {examined} rows. Upserted {upserts} pricing docs.")
 
-    # Diagnostics: show how many have non-null prices now
+    # Diagnostics: show how many have at least one non-null tier (informational only)
     non_null_any = pricing.count_documents({
         "$or": [
             {"S12": {"$ne": None}}, {"S100": {"$ne": None}}, {"S500": {"$ne": None}},
