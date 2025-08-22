@@ -288,42 +288,59 @@ def _get_prices_for_part_mongo(uid_or_part: str):
     """
     Load pricing from Mongo and aggregate into:
       { uid, name, P:{...}, S:{...}, _source: 'mongo' }
-    Expects docs in `pricing` like:
-      { part_id: "...", priced: "P"|"S", S12: 1.1, S100: 1.0, ..., eff_date: ISODate(), currency: "MYR", ... }
+    Accepts either UID or MSSID and handles both 'priced' and 'pricecd' field names.
     """
-    part_id = _product_part_id(uid_or_part)
-    if not part_id:
+    key_raw = (uid_or_part or "").strip()
+    if not key_raw:
         return None
 
+    # Get product (so we can try both UID and MSSID)
     prod = _get_product_by_uid(uid_or_part) or {}
-    result = {
-        "uid": part_id,
-        "name": prod.get("name", "") or "",
-        "P": _empty_tiers(),
-        "S": _empty_tiers(),
-        "_source": "mongo"
-    }
+    uid_candidate   = (prod.get("uid") or key_raw or "").strip()
+    mssid_candidate = (prod.get("readable_id") or "").strip()
 
-    # --- FIXED: use 'priced' instead of 'pricecd'
+    # Build candidate keys for part_id search
+    candidates = {c for c in [uid_candidate, mssid_candidate, key_raw] if c}
+    if not candidates:
+        return None
+
+    # Query pricing using any of the candidate part_ids and accept both 'priced' and 'pricecd'
     rows = list(pricing_col.find(
-        {"part_id": part_id, "priced": {"$in": ["P", "S"]}}, {"_id": 0}
+        {
+            "part_id": {"$in": list(candidates)},
+            "$or": [
+                {"priced": {"$in": ["P", "S"]}},
+                {"pricecd": {"$in": ["P", "S"]}},
+            ],
+        },
+        {"_id": 0}
     ))
+
     if not rows:
         return None
 
-    def key_dt(r):
-        dt = r.get("eff_date")
-        return dt or 0
+    result = {
+        "uid": next(iter(candidates)),  # show one of the keys
+        "name": prod.get("name", "") or "",
+        "P": _empty_tiers(),
+        "S": _empty_tiers(),
+        "_source": "mongo",
+        "_debug_candidates": list(candidates),  # handy for /debug_pricing
+    }
 
-    group = {"P": [], "S": []}
+    def key_dt(r):
+        # prefer eff_date when present
+        return r.get("eff_date") or 0
+
+    grouped = {"P": [], "S": []}
     for r in rows:
-        code = (r.get("priced") or "").upper()   # <-- FIXED
-        if code in group:
-            group[code].append(r)
+        code = (r.get("priced") or r.get("pricecd") or "").upper()
+        if code in grouped:
+            grouped[code].append(r)
 
     for code in ["P", "S"]:
-        if group[code]:
-            latest = sorted(group[code], key=key_dt, reverse=True)[0]
+        if grouped[code]:
+            latest = sorted(grouped[code], key=key_dt, reverse=True)[0]
             _merge_tier(latest, result[code])
 
     return result
