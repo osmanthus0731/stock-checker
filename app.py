@@ -8,7 +8,7 @@ from flask import (
     Flask, render_template, request, redirect, url_for,
     session, flash, send_file, abort
 )
-from pymongo import MongoClient, ASCENDING
+from pymongo import MongoClient
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 from dotenv import load_dotenv
@@ -36,8 +36,7 @@ users         = db.get_collection("users")
 products_col  = db.get_collection("products")
 admin_logs    = db.get_collection("admin_logs")
 submissions   = db.get_collection("submissions")
-pricing_col   = db.get_collection("pricing")  # <-- NEW: Mongo-first pricing
-pricing_col.create_index([("part_id", ASCENDING), ("pricecd", ASCENDING)])
+pricing_col   = db.get_collection("pricing")  # Mongo-first pricing (index already exists in DB)
 
 # ---------------- Access config ----------------
 ACCESS_DB_PATH     = (os.getenv("ACCESS_DB_PATH") or "").strip()
