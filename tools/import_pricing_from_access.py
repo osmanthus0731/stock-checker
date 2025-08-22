@@ -1,11 +1,5 @@
 # tools/import_pricing_from_access.py
-# Robust Access -> Mongo importer for pricing
-# - Normalizes Access column names (spaces/underscores/case)
-# - Migrates legacy 'priced' -> 'pricecd'
-# - Safe unique index creation on (part_id, pricecd) without conflicts
-# - DOES NOT skip rows with all-null price tiers (keeps every product row)
-# - Prefers newer eff_date on upsert
-
+# Robust Access -> Mongo importer for pricing (no index conflict)
 import os, re
 from datetime import datetime, date
 from decimal import Decimal
@@ -29,7 +23,6 @@ MONGO_DB  = os.getenv("MONGO_DB",  "inventory")
 
 TIER_KEYS = ("S12","S100","S500","1K","3K","5K","10K")
 
-# ---------- helpers ----------
 def nz(s):
     if s is None: return None
     s = str(s).strip()
@@ -55,7 +48,6 @@ def to_date(x):
     return None
 
 def normalize_key(k: str) -> str:
-    # "S 100" -> "S100", "Eff Date" -> "EFFDATE", "price_cd" -> "PRICECD"
     return re.sub(r"[^A-Za-z0-9]+", "", k or "").upper()
 
 def access_connect():
@@ -69,29 +61,27 @@ def access_connect():
     )
 
 def ensure_unique_index(coll):
-    """Ensure unique compound index on (part_id, pricecd) without throwing if it exists."""
-    wanted_name = "part_id_1_pricecd_1"
+    """Create (part_id, pricecd) unique index only if needed; fix non-unique."""
+    wanted = "part_id_1_pricecd_1"
     info = coll.index_information()
-    if wanted_name not in info:
+    if wanted not in info:
         try:
             coll.create_index([("part_id", ASCENDING), ("pricecd", ASCENDING)],
-                              name=wanted_name, unique=True)
+                              name=wanted, unique=True)
         except OperationFailure as e:
-            # If another process created it concurrently, ignore conflict
             print(f"[info] index create skipped: {getattr(e, 'details', {}) or str(e)}")
     else:
-        # If it exists but isn't unique, try to replace it
-        if not info[wanted_name].get("unique"):
+        if not info[wanted].get("unique", False):
             try:
-                coll.drop_index(wanted_name)
+                coll.drop_index(wanted)
                 coll.create_index([("part_id", ASCENDING), ("pricecd", ASCENDING)],
-                                  name=wanted_name, unique=True)
+                                  name=wanted, unique=True)
                 print("[fix] replaced non-unique index with unique one")
             except OperationFailure as e:
                 print(f"[warn] could not replace index: {getattr(e, 'details', {}) or str(e)}")
 
 def migrate_legacy_field(db):
-    """Rename 'priced' to 'pricecd' if any legacy docs exist."""
+    """Rename 'priced' -> 'pricecd' if it exists."""
     res = db["pricing"].update_many(
         {"priced": {"$exists": True}, "pricecd": {"$exists": False}},
         {"$rename": {"priced": "pricecd"}}
@@ -104,10 +94,10 @@ def run():
     db = client[MONGO_DB]
     pricing = db["pricing"]
 
-    # Make sure the index is present and correct, without crashing if it's already there
+    # SAFE index handling (prevents IndexKeySpecsConflict)
     ensure_unique_index(pricing)
 
-    # one-time migration in case previous runs wrote 'priced'
+    # Legacy field rename if needed
     migrate_legacy_field(db)
 
     cn = access_connect()
@@ -116,7 +106,6 @@ def run():
     raw_cols = [c[0] for c in cur.description]
     norm_cols = [normalize_key(c) for c in raw_cols]
 
-    # quick preview
     print(f"[info] Access table = {ACCESS_PRICE_TABLE}")
     print(f"[info] Columns ({len(raw_cols)}): {raw_cols}")
     print(f"[info] Normalized   : {norm_cols}")
@@ -127,7 +116,6 @@ def run():
     upserts = 0
     examined = 0
 
-    # known keys after normalization — include common synonyms seen in Access schemas
     KEYMAP_CANDIDATES = {
         "PART_ID": ("PART_ID", "PARTID", "PART", "PID", "ITEM", "ITEMCODE"),
         "PRICECD": ("PRICECD", "PRICE_CD", "PRICECODE", "PRICE_CODE"),
@@ -143,13 +131,11 @@ def run():
         "S10000": ("S10000", "10K", "K10"),
     }
 
-    # Build a fast lookup from normalized column -> original index
     norm_index = {normalize_key(k): i for i, k in enumerate(raw_cols)}
 
     def pick(row, *cands):
         for c in cands:
-            key = normalize_key(c)
-            idx = norm_index.get(key)
+            idx = norm_index.get(normalize_key(c))
             if idx is not None:
                 return row[idx]
         return None
@@ -190,10 +176,8 @@ def run():
             "eff_date": eff_date,
         }
 
-        # Only set keys that are not None (keeps docs clean but still stores rows with all-null tiers)
         set_doc = {k: v for k, v in doc.items() if v is not None}
 
-        # Upsert by (part_id, pricecd); prefer newer eff_date
         existing = pricing.find_one({"part_id": part_id, "pricecd": pricecd}, {"eff_date": 1})
         should_update = False
         if not existing:
@@ -214,7 +198,6 @@ def run():
     cn.close()
     print(f"[done] Examined {examined} rows. Upserted {upserts} pricing docs.")
 
-    # Diagnostics: show how many have at least one non-null tier (informational only)
     non_null_any = pricing.count_documents({
         "$or": [
             {"S12": {"$ne": None}}, {"S100": {"$ne": None}}, {"S500": {"$ne": None}},
