@@ -289,16 +289,25 @@ def _get_prices_for_part_mongo(uid_or_part: str):
     Load pricing from Mongo and aggregate into:
       { uid, name, P:{...}, S:{...}, _source: 'mongo' }
     Expects docs in `pricing` like:
-      { part_id: "...", pricecd: "P"|"S", S12: 1.1, S100: 1.0, ..., eff_date: ISODate(), currency: "MYR", ... }
+      { part_id: "...", priced: "P"|"S", S12: 1.1, S100: 1.0, ..., eff_date: ISODate(), currency: "MYR", ... }
     """
     part_id = _product_part_id(uid_or_part)
     if not part_id:
         return None
 
     prod = _get_product_by_uid(uid_or_part) or {}
-    result = {"uid": part_id, "name": prod.get("name", "") or "", "P": _empty_tiers(), "S": _empty_tiers(), "_source": "mongo"}
+    result = {
+        "uid": part_id,
+        "name": prod.get("name", "") or "",
+        "P": _empty_tiers(),
+        "S": _empty_tiers(),
+        "_source": "mongo"
+    }
 
-    rows = list(pricing_col.find({"part_id": part_id, "pricecd": {"$in": ["P", "S"]}}, {"_id": 0}))
+    # --- FIXED: use 'priced' instead of 'pricecd'
+    rows = list(pricing_col.find(
+        {"part_id": part_id, "priced": {"$in": ["P", "S"]}}, {"_id": 0}
+    ))
     if not rows:
         return None
 
@@ -308,7 +317,7 @@ def _get_prices_for_part_mongo(uid_or_part: str):
 
     group = {"P": [], "S": []}
     for r in rows:
-        code = (r.get("pricecd") or "").upper()
+        code = (r.get("priced") or "").upper()   # <-- FIXED
         if code in group:
             group[code].append(r)
 
