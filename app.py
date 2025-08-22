@@ -1,5 +1,5 @@
 # app.py — Read-only inventory from MS Access (local Windows), users + fallback data in MongoDB (cloud)
-#          + Pricing view (Cus_Price exact match on Part_id via Pricecd=P/S) — disabled when Access unavailable
+#          + Pricing view: Mongo-first (works on Render), Access fallback when available locally
 #          + Smooth caching, lazy QR, single-row lookup, Category + Volume + Pict filters
 #          + /debug_pricing/<uid> diagnostic endpoint
 #          + Cloud-safe: auto-fallback to Mongo when Access not available (Linux/Render)
@@ -21,7 +21,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = os.getenv("FLASK_SECRET", "dev-secret")
 IS_VERCEL = os.getenv("VERCEL") == "1"
 
-# ---------------- Mongo (users + optional products) ----------------
+# ---------------- Mongo (users + products + pricing) ----------------
 MONGO_URI = os.getenv("MONGO_URI") or os.getenv("MONGO_URL")
 if not MONGO_URI:
     raise RuntimeError("MONGO_URI not set")
@@ -30,10 +30,14 @@ if MONGO_URI.startswith("mongodb+srv://") or "mongodb.net" in MONGO_URI:
     _tls.update({"tls": True, "tlsCAFile": certifi.where()})
 client = MongoClient(MONGO_URI, **_tls)
 db = client[os.getenv("MONGO_DB", "inventory")]
-users = db["users"]
-products_col = db.get_collection("products")  # optional, used for Mongo fallback
-admin_logs = db.get_collection("admin_logs")  # optional
-submissions = db.get_collection("submissions")  # optional
+
+# Collections
+users         = db.get_collection("users")
+products_col  = db.get_collection("products")
+admin_logs    = db.get_collection("admin_logs")
+submissions   = db.get_collection("submissions")
+pricing_col   = db.get_collection("pricing")  # <-- NEW: Mongo-first pricing
+pricing_col.create_index([("part_id", ASCENDING), ("pricecd", ASCENDING)])
 
 # ---------------- Access config ----------------
 ACCESS_DB_PATH     = (os.getenv("ACCESS_DB_PATH") or "").strip()
@@ -87,8 +91,7 @@ def _should_use_access():
     """Use Access only when explicitly available on Windows with a real file and ODBC."""
     if FORCE_MONGO_ONLY:
         return False
-    path = ACCESS_DB_PATH
-    return (os.name == "nt") and bool(path) and os.path.exists(path) and (_odbc is not None)
+    return (os.name == "nt") and bool(ACCESS_DB_PATH) and os.path.exists(ACCESS_DB_PATH) and (_odbc is not None)
 
 # ---------------- Access helpers ----------------
 def _access_conn():
@@ -144,8 +147,6 @@ def _map_row(row):
     name  = (g("Desc","desc","Description") or "").strip()
     mssid = (g("Mssid","mssid","MSSID") or "").strip()
     cat   = g("Cat","cat","Category") or "Uncategorized"
-
-    # Pict field (numeric, not an image)
     pict  = _to_int_safe(g("Pict","pict","PICT"), default=None)
 
     loc_a = (g("Loc_film_box","loc_film_box","LocA") or "").strip()
@@ -158,7 +159,6 @@ def _map_row(row):
     if loc_b: locs.append({"area": loc_b, "quantity": qty_b})
 
     total = _to_int_safe(g("Stock_Office","Stock_office","stock_office","Total"), default=qty_a + qty_b)
-
     volume_ml = _extract_volume_ml(name) or _extract_volume_ml(mssid)
 
     return {
@@ -167,7 +167,7 @@ def _map_row(row):
         "readable_id": mssid,
         "category": cat,
         "pict": pict,
-        "locations": locs,   # list[{area, quantity}]
+        "locations": locs,
         "stock": total,
         "volume_ml": volume_ml
     }
@@ -203,9 +203,8 @@ def _get_product_by_uid_access(uid: str):
     finally:
         cn.close()
 
-# ---------- Mongo fallback helpers ----------
+# ---------- Mongo fallback helpers (products) ----------
 def _normalize_mongo_product(p: dict) -> dict:
-    """Coerce a Mongo product doc to the same shape used by templates."""
     out = {
         "uid": p.get("uid", "") or p.get("Part_id", ""),
         "name": p.get("name", "") or p.get("Desc", ""),
@@ -215,7 +214,6 @@ def _normalize_mongo_product(p: dict) -> dict:
         "stock": p.get("stock"),
         "volume_ml": p.get("volume_ml")
     }
-    # locations can be dict or list in some older DBs — normalize to list[{area, quantity}]
     locs = p.get("locations") or {}
     if isinstance(locs, dict):
         out["locations"] = [{"area": k, "quantity": (int(v) if v not in (None, "") else 0)} for k, v in locs.items()]
@@ -231,10 +229,8 @@ def _normalize_mongo_product(p: dict) -> dict:
         out["locations"] = norm
     else:
         out["locations"] = []
-    # derive volume_ml if missing
     if out.get("volume_ml") is None:
         out["volume_ml"] = _extract_volume_ml(out.get("name", "")) or _extract_volume_ml(out.get("readable_id", ""))
-    # derive stock if missing
     if out.get("stock") is None:
         out["stock"] = sum((i.get("quantity") or 0) for i in out["locations"])
     return out
@@ -256,22 +252,90 @@ def _all_products():
 def _get_product_by_uid(uid: str):
     return _get_product_by_uid_access(uid) if _should_use_access() else _get_product_by_uid_mongo(uid)
 
-# ---------- PRICE lookup (Cus_Price, EXACT MATCH using Pricecd=P/S) ----------
-def _get_prices_for_part(uid: str):
+# ---------- Pricing (Mongo-first, Access fallback) ----------
+def _coerce_num(x):
+    try:
+        return float(x) if x not in (None, "") else None
+    except Exception:
+        return None
+
+def _empty_tiers():
+    return {"S12": None, "S100": None, "S500": None, "1K": None, "3K": None, "5K": None, "10K": None}
+
+def _merge_tier(doc, bucket):
+    # Accept canonical + variants
+    mapping = {
+        "S12": "S12", "S100": "S100", "S500": "S500",
+        "1K": "1K", "S1000": "1K",
+        "3K": "3K", "S3000": "3K",
+        "5K": "5K", "S5000": "5K",
+        "10K": "10K", "S10000": "10K",
+    }
+    for k, v in doc.items():
+        k_up = str(k).upper()
+        if k_up in mapping:
+            bucket[mapping[k_up]] = _coerce_num(v)
+
+def _product_part_id(uid: str) -> str:
+    """Prefer product.readable_id (MSSID) if available; else fallback to UID."""
+    prod = _get_product_by_uid(uid)
+    if prod:
+        rid = (prod.get("readable_id") or "").strip()
+        if rid:
+            return rid
+    return (uid or "").strip()
+
+def _get_prices_for_part_mongo(uid_or_part: str):
     """
-    Access-only feature. Returns dict like { uid, name, P:{...}, S:{...} }.
-    When Access is unavailable (cloud), return None so routes can 404.
+    Load pricing from Mongo and aggregate into:
+      { uid, name, P:{...}, S:{...}, _source: 'mongo' }
+    Expects docs in `pricing` like:
+      { part_id: "...", pricecd: "P"|"S", S12: 1.1, S100: 1.0, ..., eff_date: ISODate(), currency: "MYR", ... }
+    """
+    part_id = _product_part_id(uid_or_part)
+    if not part_id:
+        return None
+
+    prod = _get_product_by_uid(uid_or_part) or {}
+    result = {"uid": part_id, "name": prod.get("name", "") or "", "P": _empty_tiers(), "S": _empty_tiers(), "_source": "mongo"}
+
+    rows = list(pricing_col.find({"part_id": part_id, "pricecd": {"$in": ["P", "S"]}}, {"_id": 0}))
+    if not rows:
+        return None
+
+    def key_dt(r):
+        dt = r.get("eff_date")
+        return dt or 0
+
+    group = {"P": [], "S": []}
+    for r in rows:
+        code = (r.get("pricecd") or "").upper()
+        if code in group:
+            group[code].append(r)
+
+    for code in ["P", "S"]:
+        if group[code]:
+            latest = sorted(group[code], key=key_dt, reverse=True)[0]
+            _merge_tier(latest, result[code])
+
+    return result
+
+def _get_prices_for_part_access(uid: str):
+    """
+    Access-only fallback. Returns { uid, name, P:{...}, S:{...}, _source:'access' } or None.
     """
     if not _should_use_access():
         return None
 
     part_id = (uid or "").strip()
-    if not part_id: return None
+    if not part_id:
+        return None
 
-    out = {"uid": part_id, "name": "", "P": {}, "S": {}}
+    out = {"uid": part_id, "name": "", "P": _empty_tiers(), "S": _empty_tiers(), "_source": "access"}
 
     prod = _get_product_by_uid_access(part_id)
-    if prod: out["name"] = prod.get("name", "")
+    if prod:
+        out["name"] = prod.get("name", "")
 
     cn = _access_conn()
     try:
@@ -290,10 +354,6 @@ def _get_prices_for_part(uid: str):
             if k: return k
         return None
 
-    def to_num(x):
-        try: return float(x) if x not in (None, "") else None
-        except Exception: return None
-
     for tup in rows:
         rec = dict(zip(cols, tup))
         t_key = get_key(rec, "Pricecd", "Priced", "Price_cd")
@@ -303,21 +363,24 @@ def _get_prices_for_part(uid: str):
 
         def tier(*names):
             k = get_key(rec, *names)
-            return to_num(rec[k]) if k else None
+            return _coerce_num(rec[k]) if k else None
 
-        out[t_val] = {
-            "S12":  tier("S12", "s12"),
-            "S100": tier("S100", "s100"),
-            "S500": tier("S500", "s500"),
-            "1K":   tier("1k", "1K", "S1000", "s1000"),
-            "3K":   tier("3k", "3K", "S3000", "s3000"),
-            "5K":   tier("5k", "5K", "S5000", "s5000"),
-            "10K":  tier("10k", "10K", "S10000", "s10000"),
-        }
+        bucket = out[t_val]
+        bucket["S12"]  = tier("S12", "s12")  or bucket["S12"]
+        bucket["S100"] = tier("S100","s100") or bucket["S100"]
+        bucket["S500"] = tier("S500","s500") or bucket["S500"]
+        bucket["1K"]   = tier("1k","1K","S1000","s1000") or bucket["1K"]
+        bucket["3K"]   = tier("3k","3K","S3000","s3000") or bucket["3K"]
+        bucket["5K"]   = tier("5k","5K","S5000","s5000") or bucket["5K"]
+        bucket["10K"]  = tier("10k","10K","S10000","s10000") or bucket["10K"]
 
     return out
 
-# ---------- data:text payload for Safari ----------
+def _get_prices_for_part(uid: str):
+    """Try Mongo first (Render-safe), fallback to Access (local)."""
+    return _get_prices_for_part_mongo(uid) or _get_prices_for_part_access(uid)
+
+# ---------- data:text payload for Safari / QR ----------
 def _text_payload_from_product(p: dict) -> str:
     if not p: return "Product not found"
     name = (p.get("name") or "Unnamed").strip()
@@ -393,11 +456,9 @@ def _filter_sort_paginate(products_all):
     selected_vol  = (request.values.get("volume") or "").strip()
     selected_pict = (request.values.get("pict") or "").strip()
 
-    # category
     if selected_cat and selected_cat != "All":
         products_all = [p for p in products_all if (p.get("category") or "Uncategorized") == selected_cat]
 
-    # volume exact match
     if selected_vol:
         try:
             v = int(selected_vol)
@@ -405,7 +466,6 @@ def _filter_sort_paginate(products_all):
         except Exception:
             pass
 
-    # pict exact match
     if selected_pict:
         try:
             pv = int(selected_pict)
@@ -413,7 +473,6 @@ def _filter_sort_paginate(products_all):
         except Exception:
             pass
 
-    # pagination
     page = request.args.get("page", 1, type=int)
     total_items = len(products_all)
     total_pages = max(1, (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
@@ -421,7 +480,6 @@ def _filter_sort_paginate(products_all):
     start, end = (page-1)*ITEMS_PER_PAGE, page*ITEMS_PER_PAGE
     paginated = products_all[start:end]
 
-    # page window
     window = 5
     half = window // 2
     start_p = max(1, page - half)
@@ -484,9 +542,9 @@ def _inventory_ctx():
 @app.route("/pricing/<uid>")
 @login_required
 def view_pricing(uid):
-    prices = _get_prices_for_part(uid)
+    prices = _get_prices_for_part(uid)  # Mongo first, Access fallback
     if not prices:
-        flash("Pricing view requires Access and is not available in the cloud build.", "info")
+        flash("No pricing found for this item (neither in Mongo nor Access).", "info")
         return redirect(url_for("admin_dashboard") if session.get("role")=="admin" else url_for("index"))
     return render_template("pricing.html", prices=prices)
 
@@ -494,7 +552,7 @@ def view_pricing(uid):
 @login_required
 def debug_pricing(uid):
     prices = _get_prices_for_part(uid)
-    return prices or {"ok": False, "msg": "pricing requires Access (local Windows only)"}
+    return prices or {"ok": False, "msg": "No pricing found in Mongo or Access"}
 
 # ---------------- Dashboards ----------------
 @app.route("/admin_dashboard", methods=["GET","POST"])
@@ -583,7 +641,6 @@ def _render_search(role):
         if not result:
             message = "No matching products found."
 
-    # build filter lists from the same source
     all_rows = _all_products()
     cats = sorted({p.get("category") or "Uncategorized" for p in all_rows})
     vols = sorted({int(p["volume_ml"]) for p in all_rows if p.get("volume_ml")})
