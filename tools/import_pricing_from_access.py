@@ -1,11 +1,11 @@
 # tools/import_pricing_from_access.py
-# Robust Access -> Mongo importer for pricing (no index conflict)
+# Robust Access -> Mongo importer for pricing (NO index creation)
 import os, re
 from datetime import datetime, date
 from decimal import Decimal
 from dotenv import load_dotenv
-from pymongo import MongoClient, ASCENDING
-from pymongo.errors import OperationFailure
+from pymongo import MongoClient
+# from pymongo import ASCENDING  # not needed since we don't create indexes now
 
 load_dotenv()
 
@@ -62,37 +62,6 @@ def access_connect():
         rf"DBQ={ACCESS_DB_PATH};READONLY=TRUE;"
     )
 
-def ensure_unique_index(coll):
-    """
-    Safely ensure unique compound index on (part_id, pricecd).
-    Never raises IndexKeySpecsConflict; skips if already correct.
-    """
-    wanted = "part_id_1_pricecd_1"
-    try:
-        info = coll.index_information()
-    except Exception:
-        info = {}
-    if wanted not in info:
-        try:
-            coll.create_index([("part_id", ASCENDING), ("pricecd", ASCENDING)],
-                              name=wanted, unique=True)
-            print("[info] Created unique index part_id_1_pricecd_1")
-        except OperationFailure as e:
-            # If concurrent create or already exists with same spec, ignore
-            print(f"[info] Index create skipped: {getattr(e, 'details', {}) or str(e)}")
-    else:
-        if not info[wanted].get("unique", False):
-            # Replace non-unique with unique
-            try:
-                coll.drop_index(wanted)
-                coll.create_index([("part_id", ASCENDING), ("pricecd", ASCENDING)],
-                                  name=wanted, unique=True)
-                print("[fix] Replaced non-unique index with unique one")
-            except OperationFailure as e:
-                print(f"[warn] Could not replace index: {getattr(e, 'details', {}) or str(e)}")
-        else:
-            print("[info] Index part_id_1_pricecd_1 already exists (unique) — skipping")
-
 def migrate_legacy_field(db):
     """Rename legacy 'priced' -> 'pricecd' once if it exists."""
     res = db["pricing"].update_many(
@@ -107,9 +76,6 @@ def run():
     client = MongoClient(MONGO_URI)
     db = client[MONGO_DB]
     pricing = db["pricing"]
-
-    # Safe index handling (prevents IndexKeySpecsConflict)
-    ensure_unique_index(pricing)
 
     # Legacy field rename if any old docs exist
     migrate_legacy_field(db)
