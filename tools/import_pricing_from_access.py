@@ -23,6 +23,7 @@ MONGO_DB  = os.getenv("MONGO_DB",  "inventory")
 
 TIER_KEYS = ("S12","S100","S500","1K","3K","5K","10K")
 
+# ---------------- helpers ----------------
 def nz(s):
     if s is None: return None
     s = str(s).strip()
@@ -48,6 +49,7 @@ def to_date(x):
     return None
 
 def normalize_key(k: str) -> str:
+    # "S 100" -> "S100", "Eff Date" -> "EFFDATE", "price_cd" -> "PRICECD"
     return re.sub(r"[^A-Za-z0-9]+", "", k or "").upper()
 
 def access_connect():
@@ -61,27 +63,38 @@ def access_connect():
     )
 
 def ensure_unique_index(coll):
-    """Create (part_id, pricecd) unique index only if needed; fix non-unique."""
+    """
+    Safely ensure unique compound index on (part_id, pricecd).
+    Never raises IndexKeySpecsConflict; skips if already correct.
+    """
     wanted = "part_id_1_pricecd_1"
-    info = coll.index_information()
+    try:
+        info = coll.index_information()
+    except Exception:
+        info = {}
     if wanted not in info:
         try:
             coll.create_index([("part_id", ASCENDING), ("pricecd", ASCENDING)],
                               name=wanted, unique=True)
+            print("[info] Created unique index part_id_1_pricecd_1")
         except OperationFailure as e:
-            print(f"[info] index create skipped: {getattr(e, 'details', {}) or str(e)}")
+            # If concurrent create or already exists with same spec, ignore
+            print(f"[info] Index create skipped: {getattr(e, 'details', {}) or str(e)}")
     else:
         if not info[wanted].get("unique", False):
+            # Replace non-unique with unique
             try:
                 coll.drop_index(wanted)
                 coll.create_index([("part_id", ASCENDING), ("pricecd", ASCENDING)],
                                   name=wanted, unique=True)
-                print("[fix] replaced non-unique index with unique one")
+                print("[fix] Replaced non-unique index with unique one")
             except OperationFailure as e:
-                print(f"[warn] could not replace index: {getattr(e, 'details', {}) or str(e)}")
+                print(f"[warn] Could not replace index: {getattr(e, 'details', {}) or str(e)}")
+        else:
+            print("[info] Index part_id_1_pricecd_1 already exists (unique) — skipping")
 
 def migrate_legacy_field(db):
-    """Rename 'priced' -> 'pricecd' if it exists."""
+    """Rename legacy 'priced' -> 'pricecd' once if it exists."""
     res = db["pricing"].update_many(
         {"priced": {"$exists": True}, "pricecd": {"$exists": False}},
         {"$rename": {"priced": "pricecd"}}
@@ -89,15 +102,16 @@ def migrate_legacy_field(db):
     if res.modified_count:
         print(f"[migrate] Renamed 'priced' -> 'pricecd' in {res.modified_count} docs.")
 
+# ---------------- main ----------------
 def run():
     client = MongoClient(MONGO_URI)
     db = client[MONGO_DB]
     pricing = db["pricing"]
 
-    # SAFE index handling (prevents IndexKeySpecsConflict)
+    # Safe index handling (prevents IndexKeySpecsConflict)
     ensure_unique_index(pricing)
 
-    # Legacy field rename if needed
+    # Legacy field rename if any old docs exist
     migrate_legacy_field(db)
 
     cn = access_connect()
@@ -116,12 +130,13 @@ def run():
     upserts = 0
     examined = 0
 
+    # Known keys + common synonyms from Access
     KEYMAP_CANDIDATES = {
         "PART_ID": ("PART_ID", "PARTID", "PART", "PID", "ITEM", "ITEMCODE"),
         "PRICECD": ("PRICECD", "PRICE_CD", "PRICECODE", "PRICE_CODE"),
-        "CURRENCY": ("CURRENCY",),
+        "CURRENCY": ("CURRENCY", "CUR"),
         "CUSTOMER": ("CUSTOMER", "CUST", "CUSTCODE", "CUSTOMERCODE"),
-        "EFF_DATE": ("EFF_DATE", "EFFDATE", "EFFECTIVEDATE", "EFFECTIVE"),
+        "EFF_DATE": ("EFF_DATE", "EFFDATE", "EFFECTIVEDATE", "EFFECTIVE", "QUOTEDT", "QUOTE_DT"),
         "S12": ("S12",),
         "S100": ("S100",),
         "S500": ("S500",),
@@ -131,6 +146,7 @@ def run():
         "S10000": ("S10000", "10K", "K10"),
     }
 
+    # Map normalized column -> index
     norm_index = {normalize_key(k): i for i, k in enumerate(raw_cols)}
 
     def pick(row, *cands):
@@ -176,8 +192,10 @@ def run():
             "eff_date": eff_date,
         }
 
+        # Keep doc tidy but DO NOT drop all‑null rows
         set_doc = {k: v for k, v in doc.items() if v is not None}
 
+        # Upsert by (part_id, pricecd); prefer newer eff_date
         existing = pricing.find_one({"part_id": part_id, "pricecd": pricecd}, {"eff_date": 1})
         should_update = False
         if not existing:
