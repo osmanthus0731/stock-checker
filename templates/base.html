@@ -6,13 +6,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root{
-      --sb-w: 220px;           /* slimmer expanded width */
-      --sb-w-collapsed: 64px;  /* slimmer collapsed width */
+      --sb-w: 220px;           /* expanded width */
+      --sb-w-collapsed: 64px;  /* collapsed width */
       --sb-bg: #111418;
       --sb-hover:#1a1f24;
       --sb-stroke:#2b333a;
       --content-max: 1100px;
       --danger:#ef4444;
+      --topbar-h: 56px;
     }
 
     html,body{height:100%}
@@ -23,14 +24,14 @@
       overflow-x:hidden;
     }
 
-    /* ===== Sidebar (click-to-toggle only) ===== */
+    /* ========= Sidebar ========= */
     .sidebar{
       position:fixed; inset:0 auto 0 0; z-index:50;
       width:var(--sb-w-collapsed);
       background:var(--sb-bg); color:#e8eef3;
       border-right:1px solid var(--sb-stroke);
       display:flex; flex-direction:column;
-      transition: width .22s ease;
+      transition: width .22s ease, transform .22s ease;
     }
     .sidebar.expanded{ width:var(--sb-w); }
 
@@ -64,7 +65,7 @@
     .sidebar:not(.expanded) .sb-label{display:none}
     .sidebar:not(.expanded) .sb-item{justify-content:center}
 
-    /* simple tooltip when collapsed */
+    /* tooltip when collapsed */
     .sidebar:not(.expanded) .sb-item[data-tip]{position:relative}
     .sidebar:not(.expanded) .sb-item[data-tip]:hover::after{
       content:attr(data-tip);
@@ -74,7 +75,7 @@
       pointer-events:none;
     }
 
-    /* ===== Footer area (Logout pinned to bottom) ===== */
+    /* Footer */
     .sb-footer{
       border-top:1px solid var(--sb-stroke);
       padding:8px;
@@ -87,27 +88,49 @@
     .sb-item.danger{color:var(--danger)}
     .sb-item.danger:hover{background:#1f1515}
 
-    /* ===== Content ===== */
+    /* ========= Topbar (mobile only) ========= */
+    .topbar{
+      position:sticky; top:0; z-index:45;
+      height:var(--topbar-h);
+      background:#ffffffcc; backdrop-filter:saturate(180%) blur(12px);
+      border-bottom:1px solid #eee;
+      display:none; align-items:center; gap:12px; padding:0 12px;
+    }
+    .burger{
+      width:36px;height:36px;border-radius:10px;border:1px solid #ddd;background:#fff;
+      display:grid;place-items:center;cursor:pointer;
+    }
+    .logo{font-weight:700}
+
+    /* ========= Content ========= */
     .page{min-height:100vh;margin-left:var(--sb-w-collapsed);transition:margin-left .22s ease}
     .with-expanded{margin-left:var(--sb-w)}
     .wrap{max-width:var(--content-max);margin:22px auto;padding:0 14px}
     .card{background:#fff;border:1px solid #eee;border-radius:14px;box-shadow:0 2px 6px rgba(0,0,0,.04);padding:16px}
-    table{width:100%;border-collapse:collapse}
-    th,td{padding:8px 10px;border-bottom:1px solid #eee;text-align:left;vertical-align:top}
-    th{background:#faf7ff}
     .flash{margin:12px 0;padding:10px;border-radius:10px}
     .flash.info{background:#eef2ff}.flash.error{background:#fee2e2}.flash.success{background:#ecfdf5}
     input,select{padding:8px;border:1px solid #ddd;border-radius:8px}
     .btn{background:#6c2bd9;color:#fff;border:none;padding:8px 12px;border-radius:8px;cursor:pointer;text-decoration:none;display:inline-block}
     .muted{color:#666}
 
-    /* Mobile overlay */
+    /* tables become horizontally scrollable on small screens */
+    .table-wrap{overflow:auto;border-radius:10px;border:1px solid #eee;background:#fff}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:8px 10px;border-bottom:1px solid #eee;text-align:left;vertical-align:top}
+    th{background:#faf7ff}
+
+    /* ========= Mobile behavior ========= */
+    @media (max-width:1024px){
+      :root{ --content-max: 100%; }  /* auto scale content width */
+    }
     @media (max-width:820px){
+      .topbar{display:flex}
       .sidebar{transform:translateX(-100%)}
       .sidebar.expanded{transform:none}
       .page,.with-expanded{margin-left:0!important}
       .scrim{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:40;opacity:0;pointer-events:none;transition:.2s}
       .scrim.show{opacity:1;pointer-events:auto}
+      .wrap{margin:16px auto}
     }
   </style>
 </head>
@@ -164,15 +187,9 @@
 
     <!-- Footer pinned to bottom -->
     <div class="sb-footer">
-      {% if session.get('username') %}
-        <div class="sb-user">{{ session.get('username') }} ({{ session.get('role') }})</div>
-      {% endif %}
-      <a class="sb-item danger"
-         href="{{ url_for('logout') }}"
-         data-tip="Logout"
-         data-confirm="Log out of Mizitco Inventory?">
+      {% if session.get('username') %}<div class="sb-user">{{ session.get('username') }} ({{ session.get('role') }})</div>{% endif %}
+      <a class="sb-item danger" href="{{ url_for('logout') }}" data-tip="Logout" data-confirm="Log out of Mizitco Inventory?">
         <span class="sb-ico">
-          <!-- power icon -->
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M12 2v10"/><path d="M5.5 5.5a8 8 0 1 0 13 0"/>
           </svg>
@@ -181,6 +198,16 @@
       </a>
     </div>
   </aside>
+
+  <!-- Mobile topbar (shows only on small screens) -->
+  <header class="topbar">
+    <button id="burger" class="burger" aria-label="Open menu">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M3 6h18M3 12h18M3 18h18"/>
+      </svg>
+    </button>
+    <div class="logo">Mizitco</div>
+  </header>
 
   <!-- Mobile scrim -->
   <div id="scrim" class="scrim"></div>
@@ -195,6 +222,7 @@
           {% endfor %}
         {% endif %}
       {% endwith %}
+      <!-- wrap tables in .table-wrap for mobile horizontal scroll -->
       {% block content %}{% endblock %}
     </div>
   </main>
@@ -203,7 +231,8 @@
     (function(){
       const sidebar = document.getElementById('sidebar');
       const page = document.getElementById('page');
-      const mHandle = document.getElementById('mHandle');
+      const mHandle = document.getElementById('mHandle');   // inside sidebar (desktop)
+      const burger = document.getElementById('burger');     // topbar (mobile)
       const scrim = document.getElementById('scrim');
 
       // Remember last state (pinned = expanded)
@@ -212,7 +241,7 @@
 
       function applyState(){
         sidebar.classList.toggle('expanded', pinned);
-        page.classList.toggle('with-expanded', pinned);
+        page.classList.toggle('with-expanded', pinned && window.innerWidth > 820);
       }
       function togglePin(){
         pinned = !pinned;
@@ -220,43 +249,42 @@
         applyState();
       }
 
-      // CLICK ONLY
+      // Desktop: toggle with the purple "M" handle
       mHandle.addEventListener('click', () => {
         if (window.innerWidth <= 820){
-          // mobile: open/close overlay
-          pinned = true; applyState();
-          scrim.classList.add('show');
+          pinned = true; applyState(); scrim.classList.add('show');
         } else {
           togglePin();
         }
       });
 
-      // Close overlay on scrim (mobile)
+      // Mobile: hamburger opens overlay
+      burger.addEventListener('click', () => {
+        pinned = true; applyState(); scrim.classList.add('show');
+      });
+
+      // Close overlay on scrim
       scrim.addEventListener('click', () => {
         scrim.classList.remove('show');
         pinned = false; applyState();
       });
 
-      // Resize handling
+      // Resize behavior
       window.addEventListener('resize', () => {
         if (window.innerWidth > 820){
           scrim.classList.remove('show');
           applyState();
         } else {
-          // default collapsed until opened
           if (!scrim.classList.contains('show')) { pinned = false; applyState(); }
         }
       });
 
-      // ---- Simple confirmation for links with data-confirm ----
+      // confirmation for links with data-confirm
       document.addEventListener('click', (e) => {
         const a = e.target.closest('a[data-confirm]');
         if (!a) return;
         const msg = a.getAttribute('data-confirm') || 'Are you sure?';
-        if (!confirm(msg)) {
-          e.preventDefault();
-          e.stopPropagation();
-        }
+        if (!confirm(msg)) { e.preventDefault(); e.stopPropagation(); }
       });
     })();
   </script>
