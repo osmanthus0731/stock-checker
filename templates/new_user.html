@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Create Account{% endblock %}
+{% block content %}
+<div class="card" style="max-width:640px;margin:auto">
+  <h2 style="margin:0 0 12px">Create new account</h2>
+  <p class="muted" style="margin-top:0">Admins can create worker or admin accounts.</p>
+
+  <form method="post" style="display:grid;gap:12px">
+    <div style="display:grid;gap:6px">
+      <label>Full name</label>
+      <input type="text" name="full_name" placeholder="Jane Doe" value="{{ request.form.full_name or '' }}">
+    </div>
+
+    <div style="display:grid;gap:6px">
+      <label>Username <span class="muted">(required)</span></label>
+      <input required name="username" placeholder="jane" value="{{ username or '' }}">
+    </div>
+
+    <div style="display:grid;gap:6px">
+      <label>Password <span class="muted">(required)</span></label>
+      <input required type="password" name="password" placeholder="••••••">
+    </div>
+
+    <div style="display:grid;gap:6px">
+      <label>Email</label>
+      <input type="email" name="email" placeholder="name@company.com" value="{{ request.form.email or '' }}">
+    </div>
+
+    <div style="display:grid;gap:6px">
+      <label>Phone</label>
+      <input type="text" name="phone" placeholder="+60 ..." value="{{ request.form.phone or '' }}">
+    </div>
+
+    <div style="display:grid;gap:6px">
+      <label>Role</label>
+      <select name="role">
+        <option value="worker" {% if (role or request.form.role) != 'admin' %}selected{% endif %}>Worker</option>
+        <option value="admin"  {% if (role or request.form.role) == 'admin' %}selected{% endif %}>Admin</option>
+      </select>
+    </div>
+
+    <div style="display:flex;gap:10px;align-items:center">
+      <button class="btn" type="submit">Create account</button>
+      <a class="btn" style="background:#e5e7eb;color:#111" href="{{ url_for('admin_dashboard') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
