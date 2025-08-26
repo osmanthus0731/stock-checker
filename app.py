@@ -526,6 +526,89 @@ def item_detail(uid: str):
     has_pricing = bool(_get_prices_for_part(uid))
     return render_template("item.html", role=session.get("role"), product=product, has_pricing=has_pricing)
 
+# ---------- Create user (ADMIN only) ----------
+@app.route("/users/new", methods=["GET", "POST"])
+@role_required("admin")
+def create_user():
+    if request.method == "POST":
+        u = (request.form.get("username") or "").strip()
+        p = request.form.get("password") or ""
+        role = (request.form.get("role") or "worker").strip().lower()
+        role = "admin" if role == "admin" else "worker"
+
+        if not u or not p:
+            flash("Username and password are required.", "error")
+            return render_template("new_user.html", username=u, role=role)
+
+        # prevent duplicate usernames
+        if users.find_one({"username": u}):
+            flash("Username already exists. Choose another.", "error")
+            return render_template("new_user.html", username=u, role=role)
+
+        users.insert_one({
+            "username": u,
+            "password": generate_password_hash(p),
+            "role": role,
+            "full_name": request.form.get("full_name", "").strip(),
+            "email": (request.form.get("email") or "").strip(),
+            "phone": (request.form.get("phone") or "").strip(),
+            "created_at": int(time.time())
+        })
+        flash(f"User '{u}' created ({role}).", "success")
+        return redirect(url_for("admin_dashboard"))
+
+    return render_template("new_user.html")
+
+# ---------- Profile (view/update + change password) ----------
+@app.route("/profile", methods=["GET", "POST"])
+@login_required
+def profile():
+    me = users.find_one({"username": session["username"]}) or {}
+    if request.method == "POST":
+        action = request.form.get("action")
+
+        # Update basic info
+        if action == "update_profile":
+            full_name = (request.form.get("full_name") or "").strip()
+            email = (request.form.get("email") or "").strip()
+            phone = (request.form.get("phone") or "").strip()
+            users.update_one(
+                {"username": session["username"]},
+                {"$set": {"full_name": full_name, "email": email, "phone": phone}}
+            )
+            flash("Profile updated.", "success")
+            return redirect(url_for("profile"))
+
+        # Change password
+        if action == "change_password":
+            current = request.form.get("current_password") or ""
+            new1 = request.form.get("new_password") or ""
+            new2 = request.form.get("confirm_password") or ""
+
+            if not check_password_hash(me.get("password", ""), current):
+                flash("Current password is incorrect.", "error")
+                return redirect(url_for("profile"))
+
+            if len(new1) < 6:
+                flash("New password must be at least 6 characters.", "error")
+                return redirect(url_for("profile"))
+
+            if new1 != new2:
+                flash("New passwords do not match.", "error")
+                return redirect(url_for("profile"))
+
+            users.update_one(
+                {"username": session["username"]},
+                {"$set": {"password": generate_password_hash(new1)}}
+            )
+            flash("Password changed.", "success")
+            return redirect(url_for("profile"))
+
+    # GET
+    me = users.find_one({"username": session["username"]}) or {}
+    return render_template("profile.html", me=me)
+
+
 # ---------------- Inventory context builder (shared) ----------------
 def _filter_sort_paginate(products_all):
     selected_cat  = (request.values.get("filter_category") or "All").strip()
