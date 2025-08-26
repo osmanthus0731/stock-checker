@@ -45,7 +45,7 @@
       content: '';
       position: absolute;
       top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0, 0, 0, 0.35); /* dark overlay */
+      background: rgba(0, 0, 0, 0.35);
       z-index: 0;
     }
 
@@ -155,6 +155,28 @@
       text-align: center;
       font-size: 14px;
     }
+
+    /* Extra actions row */
+    .actions {
+      margin-top: 12px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .link-btn {
+      background: #111827;
+      color: #fff;
+      text-decoration: none;
+      padding: 8px 12px;
+      border-radius: 8px;
+      display: inline-block;
+      font-size: 14px;
+    }
+    .hint {
+      color: #666;
+      font-size: 13px;
+    }
   </style>
 </head>
 <body>
@@ -192,6 +214,13 @@
 
       <button type="submit">Login</button>
     </form>
+
+    <!-- Create account (admin-only target). If not logged in yet,
+         clicking will redirect to login and then forward after auth. -->
+    <div class="actions">
+      <a class="link-btn" href="{{ url_for('create_user') }}">+ Create account</a>
+      <span class="hint">(Admins only)</span>
+    </div>
   </div>
 </div>
 
