@@ -116,9 +116,15 @@
       left:calc(100% + 8px); right:auto; width:220px;
     }
 
-    .sb-user{font-size:12px;color:#a7b0b7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .sb-item.danger{color:var(--danger)}
-    .sb-item.danger:hover{background:#1f1515}
+    /* 🎯 Avatar-only footer button when the sidebar is collapsed */
+    .sidebar:not(.expanded) .sb-userbtn{
+      padding:8px;
+      justify-content:center;
+    }
+    .sidebar:not(.expanded) .sb-userbtn .user-meta,
+    .sidebar:not(.expanded) .sb-userbtn .chev{
+      display:none;
+    }
 
     /* ========= Topbar (mobile only) ========= */
     .topbar{
@@ -229,13 +235,14 @@
           <span class="sb-label">Search</span>
         </a>
       {% endif %}
-      <!-- NOTE: no always-visible Profile link here any more -->
+      <!-- No always-visible Profile link; use the user popover instead -->
     </div>
 
     <!-- Footer with user popover -->
     <div class="sb-footer">
       {% if session.get('username') %}
-        <button id="userBtn" class="sb-userbtn" aria-expanded="false">
+        <button id="userBtn" class="sb-userbtn" aria-expanded="false"
+                title="{{ session.get('username') }} ({{ session.get('role') }})">
           <span class="user-ava">{{ (session.get('username','?')[:1] or '?')|upper }}</span>
           <span class="user-meta">
             <span class="user-name">{{ session.get('username') }}</span>
