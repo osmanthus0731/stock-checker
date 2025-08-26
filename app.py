@@ -4,17 +4,20 @@
 #          + /debug_pricing/<uid> diagnostic endpoint
 #          + Cloud-safe: auto-fallback to Mongo when Access not available (Linux/Render)
 #          + FIXES: back-button no-cache & logout confirmation
+#          + QR -> /item/<uid> (login-gated). Also keeps /scan/<uid> for backward-compat
+#          + Search accepts GET ?q=
 
 from flask import (
     Flask, render_template, render_template_string, request, redirect, url_for,
-    session, flash, send_file, abort
+    session, flash, send_file
 )
 from pymongo import MongoClient
+    # MongoDB Integration
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 from dotenv import load_dotenv
 from io import BytesIO
-import os, qrcode, certifi, base64, time, re
+import os, qrcode, certifi, time, re
 
 load_dotenv()
 
@@ -37,7 +40,7 @@ users         = db.get_collection("users")
 products_col  = db.get_collection("products")
 admin_logs    = db.get_collection("admin_logs")
 submissions   = db.get_collection("submissions")
-pricing_col   = db.get_collection("pricing")  # Mongo-first pricing (index already exists in DB)
+pricing_col   = db.get_collection("pricing")  # Mongo-first pricing
 
 # ---------------- Access config ----------------
 ACCESS_DB_PATH     = (os.getenv("ACCESS_DB_PATH") or "").strip()
@@ -72,7 +75,8 @@ def login_required(fn):
     @wraps(fn)
     def inner(*a, **kw):
         if "username" not in session:
-            return redirect(url_for("login"))
+            session["post_login_next"] = request.url
+            return redirect(url_for("login", next=request.path))
         return fn(*a, **kw)
     return inner
 
@@ -81,15 +85,15 @@ def role_required(*roles):
         @wraps(fn)
         def inner(*a, **kw):
             if "username" not in session or session.get("role") not in roles:
-                return redirect(url_for("login"))
+                session["post_login_next"] = request.url
+                return redirect(url_for("login", next=request.path))
             return fn(*a, **kw)
         return inner
     return wrap
 
-# ---------- No-cache headers (fixes back-button 'Logging in...' stuck) ----------
+# ---------- No-cache headers ----------
 @app.after_request
 def add_no_cache_headers(resp):
-    # Avoid caching for all dynamic routes (allow caching for /static)
     if not request.path.startswith("/static/"):
         resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         resp.headers["Pragma"] = "no-cache"
@@ -98,7 +102,6 @@ def add_no_cache_headers(resp):
 
 # ---------------- Access availability ----------------
 def _should_use_access():
-    """Use Access only when explicitly available on Windows with a real file and ODBC."""
     if FORCE_MONGO_ONLY:
         return False
     return (os.name == "nt") and bool(ACCESS_DB_PATH) and os.path.exists(ACCESS_DB_PATH) and (_odbc is not None)
@@ -135,7 +138,7 @@ def _iter_access_rows():
     finally:
         cn.close()
 
-# volume extractor (e.g., '5ml', '10 ml', '100ML')
+# --------- Helpers for mapping rows / normalization ----------
 _VOL_RE = re.compile(r"(\d{1,5})\s*ml\b", re.IGNORECASE)
 def _extract_volume_ml(text: str):
     if not text: return None
@@ -255,7 +258,6 @@ def _get_product_by_uid_mongo(uid: str):
         p = products_col.find_one({"Part_id": uid}, {"_id": 0})
     return _normalize_mongo_product(p) if p else None
 
-# Wrapper that chooses Access (if available) or Mongo
 def _all_products():
     return _all_products_from_access() if _should_use_access() else _all_products_from_mongo()
 
@@ -273,7 +275,6 @@ def _empty_tiers():
     return {"S12": None, "S100": None, "S500": None, "1K": None, "3K": None, "5K": None, "10K": None}
 
 def _merge_tier(doc, bucket):
-    # Accept canonical + variants
     mapping = {
         "S12": "S12", "S100": "S100", "S500": "S500",
         "1K": "1K", "S1000": "1K",
@@ -287,7 +288,6 @@ def _merge_tier(doc, bucket):
             bucket[mapping[k_up]] = _coerce_num(v)
 
 def _product_part_id(uid: str) -> str:
-    """Prefer product.readable_id (MSSID) if available; else fallback to UID."""
     prod = _get_product_by_uid(uid)
     if prod:
         rid = (prod.get("readable_id") or "").strip()
@@ -296,83 +296,52 @@ def _product_part_id(uid: str) -> str:
     return (uid or "").strip()
 
 def _get_prices_for_part_mongo(uid_or_part: str):
-    """
-    Load pricing from Mongo and aggregate into:
-      { uid, name, P:{...}, S:{...}, _source: 'mongo' }
-    Accepts either UID or MSSID and handles both 'priced' and 'pricecd' field names.
-    """
     key_raw = (uid_or_part or "").strip()
     if not key_raw:
         return None
-
-    # Get product (so we can try both UID and MSSID)
     prod = _get_product_by_uid(uid_or_part) or {}
     uid_candidate   = (prod.get("uid") or key_raw or "").strip()
     mssid_candidate = (prod.get("readable_id") or "").strip()
-
-    # Build candidate keys for part_id search
     candidates = {c for c in [uid_candidate, mssid_candidate, key_raw] if c}
     if not candidates:
         return None
-
-    # Query pricing using any of the candidate part_ids and accept both 'priced' and 'pricecd'
     rows = list(pricing_col.find(
         {
             "part_id": {"$in": list(candidates)},
-            "$or": [
-                {"priced": {"$in": ["P", "S"]}},
-                {"pricecd": {"$in": ["P", "S"]}},
-            ],
+            "$or": [{"priced": {"$in": ["P","S"]}}, {"pricecd": {"$in": ["P","S"]}}],
         },
-        {"_id": 0}
+        {"_id":0}
     ))
-
     if not rows:
         return None
-
     result = {
-        "uid": next(iter(candidates)),  # show one of the keys
+        "uid": next(iter(candidates)),
         "name": prod.get("name", "") or "",
         "P": _empty_tiers(),
         "S": _empty_tiers(),
         "_source": "mongo",
-        "_debug_candidates": list(candidates),  # handy for /debug_pricing
+        "_debug_candidates": list(candidates),
     }
-
-    def key_dt(r):
-        # prefer eff_date when present
-        return r.get("eff_date") or 0
-
+    def key_dt(r): return r.get("eff_date") or 0
     grouped = {"P": [], "S": []}
     for r in rows:
         code = (r.get("priced") or r.get("pricecd") or "").upper()
-        if code in grouped:
-            grouped[code].append(r)
-
-    for code in ["P", "S"]:
+        if code in grouped: grouped[code].append(r)
+    for code in ["P","S"]:
         if grouped[code]:
             latest = sorted(grouped[code], key=key_dt, reverse=True)[0]
             _merge_tier(latest, result[code])
-
     return result
 
 def _get_prices_for_part_access(uid: str):
-    """
-    Access-only fallback. Returns { uid, name, P:{...}, S:{...}, _source:'access' } or None.
-    """
     if not _should_use_access():
         return None
-
     part_id = (uid or "").strip()
     if not part_id:
         return None
-
     out = {"uid": part_id, "name": "", "P": _empty_tiers(), "S": _empty_tiers(), "_source": "access"}
-
     prod = _get_product_by_uid_access(part_id)
-    if prod:
-        out["name"] = prod.get("name", "")
-
+    if prod: out["name"] = prod.get("name", "")
     cn = _access_conn()
     try:
         cur = cn.cursor()
@@ -381,66 +350,33 @@ def _get_prices_for_part_access(uid: str):
         cols = [c[0] for c in cur.description] if getattr(cur, "description", None) else []
     finally:
         cn.close()
-
-    def get_key(d, *candidates):
+    def get_key(d, *cands):
         if not d: return None
         lower = {k.lower(): k for k in d.keys()}
-        for cand in candidates:
-            k = lower.get(cand.lower())
+        for c in cands:
+            k = lower.get(c.lower())
             if k: return k
         return None
-
     for tup in rows:
         rec = dict(zip(cols, tup))
         t_key = get_key(rec, "Pricecd", "Priced", "Price_cd")
         t_val = (str(rec[t_key]).strip().upper() if t_key and rec.get(t_key) is not None else "")
-        if t_val not in ("P", "S"):
-            continue
-
+        if t_val not in ("P","S"): continue
         def tier(*names):
             k = get_key(rec, *names)
             return _coerce_num(rec[k]) if k else None
-
         bucket = out[t_val]
-        bucket["S12"]  = tier("S12", "s12")  or bucket["S12"]
+        bucket["S12"]  = tier("S12","s12")  or bucket["S12"]
         bucket["S100"] = tier("S100","s100") or bucket["S100"]
         bucket["S500"] = tier("S500","s500") or bucket["S500"]
         bucket["1K"]   = tier("1k","1K","S1000","s1000") or bucket["1K"]
         bucket["3K"]   = tier("3k","3K","S3000","s3000") or bucket["3K"]
         bucket["5K"]   = tier("5k","5K","S5000","s5000") or bucket["5K"]
         bucket["10K"]  = tier("10k","10K","S10000","s10000") or bucket["10K"]
-
     return out
 
 def _get_prices_for_part(uid: str):
-    """Try Mongo first (Render-safe), fallback to Access (local)."""
     return _get_prices_for_part_mongo(uid) or _get_prices_for_part_access(uid)
-
-# ---------- data:text payload for Safari / QR ----------
-def _text_payload_from_product(p: dict) -> str:
-    if not p: return "Product not found"
-    name = (p.get("name") or "Unnamed").strip()
-    uid  = (p.get("uid") or "").strip()
-    lines = [f"{name} ({uid})"]
-    locs = p.get("locations") or []
-    if not locs:
-        lines.append("Locations: —")
-    else:
-        lines.append("Locations:")
-        for L in locs:
-            area = (L.get("area") or "—").strip()
-            qty  = L.get("quantity")
-            try: qty = int(qty)
-            except: qty = "—"
-            lines.append(f"- {area}: {qty}")
-    return "\n".join(lines)
-
-def _data_url_for_text(text: str) -> str:
-    b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
-    return f"data:text/plain;base64,{b64}"
-
-def _qr_target_for_product(p: dict) -> str:
-    return _data_url_for_text(_text_payload_from_product(p))
 
 # ---------------- Health ----------------
 @app.route("/ping")
@@ -452,9 +388,11 @@ def favicon(): return "", 204
 # ---------------- Auth ----------------
 @app.route("/", methods=["GET","POST"])
 def login():
-    # If already logged in and this page is reached (e.g., Back), bounce to dashboard
     if request.method == "GET" and "username" in session:
-        return redirect(url_for("admin_dashboard") if session.get("role") == "admin" else url_for("index"))
+        next_url = request.args.get("next")
+        if next_url:
+            return redirect(next_url)
+        return redirect(url_for("admin_dashboard") if session.get("role")=="admin" else url_for("index"))
 
     if request.method == "POST":
         u = (request.form.get("username") or "").strip()
@@ -462,6 +400,8 @@ def login():
         user = users.find_one({"username": u})
         if user and check_password_hash(user["password"], p):
             session["username"], session["role"] = user["username"], user["role"]
+            next_url = request.args.get("next") or session.pop("post_login_next", None)
+            if next_url: return redirect(next_url)
             return redirect("/admin_dashboard" if user["role"] == "admin" else "/index")
         flash("Invalid credentials", "error")
     return render_template("login.html")
@@ -475,17 +415,12 @@ def seed_users():
     ])
     return "seeded"
 
-# Logout with confirmation:
-#   GET  /logout -> prompt page "Do you want to log out?"
-#   POST /logout -> perform logout
 @app.route("/logout", methods=["GET", "POST"])
 @login_required
 def logout():
     if request.method == "POST":
         session.clear()
         return redirect(url_for("login"))
-
-    # Minimal confirm page (works even if your templates don't include a confirm modal)
     return render_template_string("""
 <!doctype html>
 <html lang="en">
@@ -517,14 +452,45 @@ def logout():
 </html>
     """)
 
-# ---------------- QR (lazy, single-row lookup) ----------------
+# ---------------- QR (now points to /item/<uid>) ----------------
+BASE_URL = os.getenv("BASE_URL", "https://mizitco-system.onrender.com").rstrip("/")
+
+def _qr_target_url(uid: str) -> str:
+    """
+    Build absolute URL to /item/<uid>. Uses BASE_URL if provided, else Flask _external.
+    """
+    path = url_for("item_detail", uid=uid)
+    if BASE_URL:
+        return f"{BASE_URL}{path}"
+    return url_for("item_detail", uid=uid, _external=True)
+
 @app.route("/qr/<uid>.png")
 def qr(uid: str):
-    p = _get_product_by_uid(uid)
-    target = _qr_target_for_product(p) if p else _data_url_for_text(f"Product not found\nUID: {uid}")
+    target = _qr_target_url(uid)
     img = qrcode.make(target)
     buf = BytesIO(); img.save(buf, format="PNG"); buf.seek(0)
     return send_file(buf, mimetype="image/png", download_name=f"{uid}.png")
+
+# Backward-compat: older codes that hit /scan/<uid>
+@app.route("/scan/<uid>")
+def scan_qr(uid: str):
+    if "username" not in session:
+        session["post_login_next"] = url_for("item_detail", uid=uid)
+        return redirect(url_for("login", next=url_for("item_detail", uid=uid)))
+    return redirect(url_for("item_detail", uid=uid))
+
+# Item detail page (login-gated)
+@app.route("/item/<uid>")
+@login_required
+def item_detail(uid: str):
+    product = _get_product_by_uid(uid)
+    if not product:
+        flash("Product not found.", "error")
+        if session.get("role") == "admin":
+            return redirect(url_for("search_admin", q=uid))
+        return redirect(url_for("search_worker", q=uid))
+    has_pricing = bool(_get_prices_for_part(uid))
+    return render_template("item.html", role=session.get("role"), product=product, has_pricing=has_pricing)
 
 # ---------------- Inventory context builder (shared) ----------------
 def _filter_sort_paginate(products_all):
@@ -618,7 +584,7 @@ def _inventory_ctx():
 @app.route("/pricing/<uid>")
 @login_required
 def view_pricing(uid):
-    prices = _get_prices_for_part(uid)  # Mongo first, Access fallback
+    prices = _get_prices_for_part(uid)
     if not prices:
         flash("No pricing found for this item (neither in Mongo nor Access).", "info")
         return redirect(url_for("admin_dashboard") if session.get("role")=="admin" else url_for("index"))
@@ -681,11 +647,15 @@ def admin_logs_stub():
 # ---------------- Search ----------------
 def _render_search(role):
     result, message = [], None
-    if request.method == "POST":
-        q = (request.form.get("search_uid") or "").strip().lower()
-        selected_cat  = (request.form.get("filter_category") or "All").strip()
-        selected_vol  = (request.form.get("volume") or "").strip()
-        selected_pict = (request.form.get("pict") or "").strip()
+
+    # Support GET ?q=... for deep links / QR fallbacks
+    q_get = (request.args.get("q") or "").strip().lower()
+
+    if request.method == "POST" or q_get:
+        q = (request.form.get("search_uid") or q_get or "").strip().lower()
+        selected_cat  = (request.values.get("filter_category") or "All").strip()
+        selected_vol  = (request.values.get("volume") or "").strip()
+        selected_pict = (request.values.get("pict") or "").strip()
 
         rows = _all_products()
         if q:
