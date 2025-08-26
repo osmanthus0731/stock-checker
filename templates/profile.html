@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}My Profile{% endblock %}
+{% block content %}
+<div class="card" style="max-width:880px;margin:auto;display:grid;gap:22px">
+  <h2 style="margin:0">My profile</h2>
+
+  <div class="table-wrap" style="border:none;background:transparent">
+    <table>
+      <tbody>
+        <tr><th style="width:180px">Username</th><td>{{ me.username }}</td></tr>
+        <tr><th>Role</th><td>{{ me.role|capitalize }}</td></tr>
+        <tr><th>Created</th><td>{% if me.created_at %}{{ me.created_at|int }}{% else %}—{% endif %}</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Update basic info -->
+  <form method="post" style="display:grid;gap:12px">
+    <input type="hidden" name="action" value="update_profile">
+    <h3 style="margin:6px 0 0">Details</h3>
+    <div style="display:grid;gap:10px;grid-template-columns:1fr 1fr">
+      <div style="display:grid;gap:6px">
+        <label>Full name</label>
+        <input name="full_name" value="{{ me.full_name or '' }}" placeholder="Your name">
+      </div>
+      <div style="display:grid;gap:6px">
+        <label>Email</label>
+        <input type="email" name="email" value="{{ me.email or '' }}" placeholder="you@company.com">
+      </div>
+      <div style="display:grid;gap:6px">
+        <label>Phone</label>
+        <input name="phone" value="{{ me.phone or '' }}" placeholder="+60 ...">
+      </div>
+    </div>
+    <div>
+      <button class="btn" type="submit">Save changes</button>
+    </div>
+  </form>
+
+  <hr style="border:none;height:1px;background:#eee">
+
+  <!-- Change password -->
+  <form method="post" style="display:grid;gap:12px;max-width:520px">
+    <input type="hidden" name="action" value="change_password">
+    <h3 style="margin:6px 0 0">Change password</h3>
+    <div style="display:grid;gap:6px">
+      <label>Current password</label>
+      <input type="password" name="current_password" required placeholder="••••••">
+    </div>
+    <div style="display:grid;gap:6px">
+      <label>New password</label>
+      <input type="password" name="new_password" required placeholder="At least 6 characters">
+    </div>
+    <div style="display:grid;gap:6px">
+      <label>Confirm new password</label>
+      <input type="password" name="confirm_password" required placeholder="Repeat new password">
+    </div>
+    <div>
+      <button class="btn" type="submit">Update password</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
