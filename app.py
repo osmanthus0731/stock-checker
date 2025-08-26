@@ -6,13 +6,14 @@
 #          + FIXES: back-button no-cache & logout confirmation
 #          + QR -> /item/<uid> (login-gated). Also keeps /scan/<uid> for backward-compat
 #          + Search accepts GET ?q=
+#          + Hardened Mongo timeouts + graceful error handling + /dbcheck
 
 from flask import (
     Flask, render_template, render_template_string, request, redirect, url_for,
     session, flash, send_file
 )
 from pymongo import MongoClient
-    # MongoDB Integration
+from pymongo.errors import ServerSelectionTimeoutError
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 from dotenv import load_dotenv
@@ -29,9 +30,16 @@ IS_VERCEL = os.getenv("VERCEL") == "1"
 MONGO_URI = os.getenv("MONGO_URI") or os.getenv("MONGO_URL")
 if not MONGO_URI:
     raise RuntimeError("MONGO_URI not set")
-_tls = {"serverSelectionTimeoutMS": 15000}
+
+# Longer timeouts help on cold/paused clusters; TLS for SRV
+_tls = {
+    "serverSelectionTimeoutMS": 45000,  # wait up to 45s for primary on cold start
+    "connectTimeoutMS": 20000,
+    "socketTimeoutMS": 20000,
+}
 if MONGO_URI.startswith("mongodb+srv://") or "mongodb.net" in MONGO_URI:
     _tls.update({"tls": True, "tlsCAFile": certifi.where()})
+
 client = MongoClient(MONGO_URI, **_tls)
 db = client[os.getenv("MONGO_DB", "inventory")]
 
@@ -216,7 +224,7 @@ def _get_product_by_uid_access(uid: str):
     finally:
         cn.close()
 
-# ---------- Mongo fallback helpers (products) ----------
+# ---------- Mongo helpers (with graceful error handling) ----------
 def _normalize_mongo_product(p: dict) -> dict:
     out = {
         "uid": p.get("uid", "") or p.get("Part_id", ""),
@@ -249,14 +257,26 @@ def _normalize_mongo_product(p: dict) -> dict:
     return out
 
 def _all_products_from_mongo():
-    docs = list(products_col.find({}, {"_id": 0}))
-    return [_normalize_mongo_product(p) for p in docs]
+    try:
+        docs = list(products_col.find({}, {"_id": 0}))
+        return [_normalize_mongo_product(p) for p in docs]
+    except Exception as e:
+        app.logger.exception("Mongo read failed in _all_products_from_mongo: %s", e)
+        try: flash("Database is unavailable right now. Showing an empty list.", "error")
+        except: pass
+        return []
 
 def _get_product_by_uid_mongo(uid: str):
-    p = products_col.find_one({"uid": uid}, {"_id": 0})
-    if not p:
-        p = products_col.find_one({"Part_id": uid}, {"_id": 0})
-    return _normalize_mongo_product(p) if p else None
+    try:
+        p = products_col.find_one({"uid": uid}, {"_id": 0})
+        if not p:
+            p = products_col.find_one({"Part_id": uid}, {"_id": 0})
+        return _normalize_mongo_product(p) if p else None
+    except Exception as e:
+        app.logger.exception("Mongo read failed in _get_product_by_uid_mongo: %s", e)
+        try: flash("Database is unavailable right now.", "error")
+        except: pass
+        return None
 
 def _all_products():
     return _all_products_from_access() if _should_use_access() else _all_products_from_mongo()
@@ -296,42 +316,46 @@ def _product_part_id(uid: str) -> str:
     return (uid or "").strip()
 
 def _get_prices_for_part_mongo(uid_or_part: str):
-    key_raw = (uid_or_part or "").strip()
-    if not key_raw:
+    try:
+        key_raw = (uid_or_part or "").strip()
+        if not key_raw:
+            return None
+        prod = _get_product_by_uid(uid_or_part) or {}
+        uid_candidate   = (prod.get("uid") or key_raw or "").strip()
+        mssid_candidate = (prod.get("readable_id") or "").strip()
+        candidates = {c for c in [uid_candidate, mssid_candidate, key_raw] if c}
+        if not candidates:
+            return None
+        rows = list(pricing_col.find(
+            {
+                "part_id": {"$in": list(candidates)},
+                "$or": [{"priced": {"$in": ["P","S"]}}, {"pricecd": {"$in": ["P","S"]}}],
+            },
+            {"_id":0}
+        ))
+        if not rows:
+            return None
+        result = {
+            "uid": next(iter(candidates)),
+            "name": prod.get("name", "") or "",
+            "P": _empty_tiers(),
+            "S": _empty_tiers(),
+            "_source": "mongo",
+            "_debug_candidates": list(candidates),
+        }
+        def key_dt(r): return r.get("eff_date") or 0
+        grouped = {"P": [], "S": []}
+        for r in rows:
+            code = (r.get("priced") or r.get("pricecd") or "").upper()
+            if code in grouped: grouped[code].append(r)
+        for code in ["P","S"]:
+            if grouped[code]:
+                latest = sorted(grouped[code], key=key_dt, reverse=True)[0]
+                _merge_tier(latest, result[code])
+        return result
+    except Exception as e:
+        app.logger.exception("Mongo read failed in _get_prices_for_part_mongo: %s", e)
         return None
-    prod = _get_product_by_uid(uid_or_part) or {}
-    uid_candidate   = (prod.get("uid") or key_raw or "").strip()
-    mssid_candidate = (prod.get("readable_id") or "").strip()
-    candidates = {c for c in [uid_candidate, mssid_candidate, key_raw] if c}
-    if not candidates:
-        return None
-    rows = list(pricing_col.find(
-        {
-            "part_id": {"$in": list(candidates)},
-            "$or": [{"priced": {"$in": ["P","S"]}}, {"pricecd": {"$in": ["P","S"]}}],
-        },
-        {"_id":0}
-    ))
-    if not rows:
-        return None
-    result = {
-        "uid": next(iter(candidates)),
-        "name": prod.get("name", "") or "",
-        "P": _empty_tiers(),
-        "S": _empty_tiers(),
-        "_source": "mongo",
-        "_debug_candidates": list(candidates),
-    }
-    def key_dt(r): return r.get("eff_date") or 0
-    grouped = {"P": [], "S": []}
-    for r in rows:
-        code = (r.get("priced") or r.get("pricecd") or "").upper()
-        if code in grouped: grouped[code].append(r)
-    for code in ["P","S"]:
-        if grouped[code]:
-            latest = sorted(grouped[code], key=key_dt, reverse=True)[0]
-            _merge_tier(latest, result[code])
-    return result
 
 def _get_prices_for_part_access(uid: str):
     if not _should_use_access():
@@ -381,6 +405,16 @@ def _get_prices_for_part(uid: str):
 # ---------------- Health ----------------
 @app.route("/ping")
 def ping(): return "pong"
+
+@app.route("/dbcheck")
+def dbcheck():
+    """Simple DB health: returns ok + estimated product count, or error."""
+    try:
+        client.admin.command("ping")
+        n = products_col.estimated_document_count()
+        return {"ok": True, "ping": "ok", "products": int(n)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}, 503
 
 @app.route("/favicon.ico")
 def favicon(): return "", 204
