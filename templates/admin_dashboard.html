@@ -3,9 +3,7 @@
 
 {% block content %}
 <style>
-  .toolbar{
-    display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0 16px
-  }
+  .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0 16px}
   .toolbar label{font-weight:600;color:#334155}
   .toolbar select,.toolbar input[type="text"]{
     padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;min-width:160px;
@@ -20,10 +18,7 @@
   .btn:hover{opacity:.92}
   .btn:active{transform:translateY(1px)}
   .muted{color:#6b7280;font-size:.9rem}
-  .card{
-    background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:10px;
-    box-shadow:0 1px 2px rgba(0,0,0,.04)
-  }
+  .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:10px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
   .table-wrap{overflow:auto;border-radius:10px}
   table{width:100%;border-collapse:separate;border-spacing:0;min-width:1100px}
   thead th{
@@ -32,14 +27,8 @@
   }
   tbody td{border-bottom:1px solid #f1f5f9;padding:10px 12px;vertical-align:top}
   tbody tr:hover{background:#fafafa}
-  .chip{
-    display:inline-block;background:#eef2ff;border:1px solid #e5e7eb;padding:4px 8px;
-    border-radius:999px;margin:0 6px 6px 0;font-size:.85rem;white-space:nowrap
-  }
-  .badge{
-    display:inline-block;background:#f1f5f9;border:1px solid #e5e7eb;color:#334155;
-    padding:2px 8px;border-radius:999px;font-size:.8rem
-  }
+  .chip{display:inline-block;background:#eef2ff;border:1px solid #e5e7eb;padding:4px 8px;border-radius:999px;margin:0 6px 6px 0;font-size:.85rem;white-space:nowrap}
+  .badge{display:inline-block;background:#f1f5f9;border:1px solid #e5e7eb;color:#334155;padding:2px 8px;border-radius:999px;font-size:.8rem}
   .qrimg{display:block;border:1px solid #eee;border-radius:8px;margin-top:8px}
   .pagy{margin-top:14px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
   .pagy .btn{background:#fff;color:#111827;border-color:#e5e7eb}
@@ -49,7 +38,12 @@
 <h1 style="margin:0 0 8px">Admin Dashboard</h1>
 <p class="muted" style="margin:0 0 14px;">Filter, view, and jump to pricing. Pict shows your non-image “pict” field.</p>
 
-{# Compute "No Pict" count for current page results #}
+<!-- ✨ New action buttons -->
+<div style="display:flex;justify-content:flex-end;gap:8px;margin:6px 0 10px">
+  <a class="btn" href="{{ url_for('create_user') }}">+ New account</a>
+  <a class="btn" href="{{ url_for('profile') }}">Profile</a>
+</div>
+
 {% set ns = namespace(nopict=0) %}
 {% for p in products %}
   {% if not p.pict %}{% set ns.nopict = ns.nopict + 1 %}{% endif %}
@@ -74,7 +68,6 @@
   <label>Pict</label>
   <select name="pict" title="Filter by pict value">
     <option value="" {{ 'selected' if not selected_pict }}>Any</option>
-    {# Include a 'none' sentinel if your backend supports it; otherwise it’s fine to omit #}
     <option value="__none__" {{ 'selected' if selected_pict == '__none__' }}>No Pict</option>
     {% for pv in pict_values %}
       <option value="{{ pv }}" {{ 'selected' if selected_pict == (pv|string) }}>{{ pv }}</option>
@@ -123,9 +116,7 @@
           </td>
           <td>
             <button class="btn" type="button" onclick="toggleQR('{{ p.uid }}')">Show QR</button>
-            <div id="qrwrap-{{ p.uid }}" style="display:none;">
-              <!-- QR injected on click -->
-            </div>
+            <div id="qrwrap-{{ p.uid }}" style="display:none;"></div>
           </td>
           <td>
             <a class="btn" href="{{ url_for('view_pricing', uid=p.uid) }}">View</a>
