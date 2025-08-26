@@ -3,9 +3,10 @@
 #          + Smooth caching, lazy QR, single-row lookup, Category + Volume + Pict filters
 #          + /debug_pricing/<uid> diagnostic endpoint
 #          + Cloud-safe: auto-fallback to Mongo when Access not available (Linux/Render)
+#          + FIXES: back-button no-cache & logout confirmation
 
 from flask import (
-    Flask, render_template, request, redirect, url_for,
+    Flask, render_template, render_template_string, request, redirect, url_for,
     session, flash, send_file, abort
 )
 from pymongo import MongoClient
@@ -84,6 +85,16 @@ def role_required(*roles):
             return fn(*a, **kw)
         return inner
     return wrap
+
+# ---------- No-cache headers (fixes back-button 'Logging in...' stuck) ----------
+@app.after_request
+def add_no_cache_headers(resp):
+    # Avoid caching for all dynamic routes (allow caching for /static)
+    if not request.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
 
 # ---------------- Access availability ----------------
 def _should_use_access():
@@ -441,6 +452,10 @@ def favicon(): return "", 204
 # ---------------- Auth ----------------
 @app.route("/", methods=["GET","POST"])
 def login():
+    # If already logged in and this page is reached (e.g., Back), bounce to dashboard
+    if request.method == "GET" and "username" in session:
+        return redirect(url_for("admin_dashboard") if session.get("role") == "admin" else url_for("index"))
+
     if request.method == "POST":
         u = (request.form.get("username") or "").strip()
         p = (request.form.get("password") or "")
@@ -460,11 +475,47 @@ def seed_users():
     ])
     return "seeded"
 
-@app.route("/logout")
+# Logout with confirmation:
+#   GET  /logout -> prompt page "Do you want to log out?"
+#   POST /logout -> perform logout
+@app.route("/logout", methods=["GET", "POST"])
 @login_required
 def logout():
-    session.clear()
-    return redirect("/")
+    if request.method == "POST":
+        session.clear()
+        return redirect(url_for("login"))
+
+    # Minimal confirm page (works even if your templates don't include a confirm modal)
+    return render_template_string("""
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Confirm Logout</title>
+    <style>
+      body { font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:#fafafa; margin:0; display:grid; place-items:center; height:100vh; }
+      .card { background:#fff; padding:24px; border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,.08); width:min(420px,90vw); }
+      h2 { margin:0 0 8px; }
+      p { color:#555; margin:0 0 16px; }
+      .row { display:flex; gap:12px; }
+      .btn { appearance:none; border:0; padding:10px 14px; border-radius:8px; cursor:pointer; font-weight:600; }
+      .btn-primary { background:#6d28d9; color:#fff; }
+      .btn-ghost { background:#f3f4f6; color:#111; }
+      a { text-decoration:none; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h2>Log out?</h2>
+      <p>Do you want to log out of your Mizitco account <strong>{{ session.get('username') }}</strong>?</p>
+      <form method="post" class="row">
+        <button class="btn btn-primary" type="submit">Yes, log out</button>
+        <a class="btn btn-ghost" href="{{ url_for('admin_dashboard') if session.get('role')=='admin' else url_for('index') }}">Cancel</a>
+      </form>
+    </div>
+  </body>
+</html>
+    """)
 
 # ---------------- QR (lazy, single-row lookup) ----------------
 @app.route("/qr/<uid>.png")
