@@ -38,12 +38,6 @@
 <h1 style="margin:0 0 8px">Admin Dashboard</h1>
 <p class="muted" style="margin:0 0 14px;">Filter, view, and jump to pricing.</p>
 
-<!-- Action buttons -->
-<div style="display:flex;justify-content:flex-end;gap:8px;margin:6px 0 10px">
-  <a class="btn" href="{{ url_for('create_user') }}">+ New account</a>
-  <a class="btn" href="{{ url_for('profile') }}">Profile</a>
-</div>
-
 {% set ns = namespace(nopict=0) %}
 {% for p in products %}
   {% if not p.pict %}{% set ns.nopict = ns.nopict + 1 %}{% endif %}
