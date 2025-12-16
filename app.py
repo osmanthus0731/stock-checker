@@ -7,6 +7,7 @@
 #          + QR -> /item/<uid> (login-gated). Also keeps /scan/<uid> for backward-compat
 #          + Search accepts GET ?q=
 #          + Hardened Mongo timeouts + graceful error handling + /dbcheck
+#          + FIX: Emergency fallback admin + supports hashed OR plaintext passwords + optional bootstrap admin
 
 from flask import (
     Flask, render_template, render_template_string, request, redirect, url_for,
@@ -26,14 +27,28 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = os.getenv("FLASK_SECRET", "dev-secret")
 IS_VERCEL = os.getenv("VERCEL") == "1"
 
+# ---------------- Emergency fallback admin (LAST RESORT) ----------------
+FALLBACK_ADMIN = {
+    "username": os.getenv("FALLBACK_ADMIN_USERNAME", "admin"),
+    "password": os.getenv("FALLBACK_ADMIN_PASSWORD", "admin12345"),
+    "role": os.getenv("FALLBACK_ADMIN_ROLE", "admin"),
+}
+
+# Optional: bootstrap first admin if users collection empty
+BOOTSTRAP_USERS = os.getenv("BOOTSTRAP_USERS", "0") == "1"
+BOOTSTRAP_ADMIN = {
+    "username": os.getenv("BOOTSTRAP_ADMIN_USERNAME", FALLBACK_ADMIN["username"]),
+    "password": os.getenv("BOOTSTRAP_ADMIN_PASSWORD", FALLBACK_ADMIN["password"]),
+    "role": "admin",
+}
+
 # ---------------- Mongo (users + products + pricing) ----------------
 MONGO_URI = os.getenv("MONGO_URI") or os.getenv("MONGO_URL")
 if not MONGO_URI:
     raise RuntimeError("MONGO_URI not set")
 
-# Longer timeouts help on cold/paused clusters; TLS for SRV
 _tls = {
-    "serverSelectionTimeoutMS": 45000,  # wait up to 45s for primary on cold start
+    "serverSelectionTimeoutMS": 45000,
     "connectTimeoutMS": 20000,
     "socketTimeoutMS": 20000,
 }
@@ -48,7 +63,40 @@ users         = db.get_collection("users")
 products_col  = db.get_collection("products")
 admin_logs    = db.get_collection("admin_logs")
 submissions   = db.get_collection("submissions")
-pricing_col   = db.get_collection("pricing")  # Mongo-first pricing
+pricing_col   = db.get_collection("pricing")
+
+def _safe_mongo_ping() -> bool:
+    try:
+        client.admin.command("ping")
+        return True
+    except Exception:
+        return False
+
+def _bootstrap_admin_if_needed():
+    """
+    If BOOTSTRAP_USERS=1 and users collection is empty, create an admin.
+    Safe for cold starts; won't overwrite existing users.
+    """
+    if not BOOTSTRAP_USERS:
+        return
+    try:
+        # quick ping first
+        client.admin.command("ping")
+        if users.estimated_document_count() == 0:
+            users.insert_one({
+                "username": BOOTSTRAP_ADMIN["username"],
+                "password": generate_password_hash(BOOTSTRAP_ADMIN["password"]),
+                "role": "admin",
+                "created_at": int(time.time()),
+                "bootstrap": True,
+            })
+            app.logger.warning("Bootstrapped admin user '%s' because users collection was empty.",
+                               BOOTSTRAP_ADMIN["username"])
+    except Exception as e:
+        # Don't crash the app; fallback login still works
+        app.logger.exception("Bootstrap admin failed: %s", e)
+
+_bootstrap_admin_if_needed()
 
 # ---------------- Access config ----------------
 ACCESS_DB_PATH     = (os.getenv("ACCESS_DB_PATH") or "").strip()
@@ -99,6 +147,24 @@ def role_required(*roles):
         return inner
     return wrap
 
+def _is_hash(s: str) -> bool:
+    if not s or not isinstance(s, str):
+        return False
+    # Werkzeug hashes commonly start with these
+    return s.startswith("scrypt:") or s.startswith("pbkdf2:") or s.startswith("argon2:")
+
+def _password_matches(stored: str, supplied: str) -> bool:
+    """
+    Supports BOTH hashed and plaintext stored passwords.
+    - If stored is a hash → check_password_hash
+    - Else → string compare
+    """
+    stored = stored or ""
+    supplied = supplied or ""
+    if _is_hash(stored):
+        return check_password_hash(stored, supplied)
+    return stored == supplied
+
 # ---------- No-cache headers ----------
 @app.after_request
 def add_no_cache_headers(resp):
@@ -146,7 +212,6 @@ def _iter_access_rows():
     finally:
         cn.close()
 
-# --------- Helpers for mapping rows / normalization ----------
 _VOL_RE = re.compile(r"(\d{1,5})\s*ml\b", re.IGNORECASE)
 def _extract_volume_ml(text: str):
     if not text: return None
@@ -307,14 +372,6 @@ def _merge_tier(doc, bucket):
         if k_up in mapping:
             bucket[mapping[k_up]] = _coerce_num(v)
 
-def _product_part_id(uid: str) -> str:
-    prod = _get_product_by_uid(uid)
-    if prod:
-        rid = (prod.get("readable_id") or "").strip()
-        if rid:
-            return rid
-    return (uid or "").strip()
-
 def _get_prices_for_part_mongo(uid_or_part: str):
     try:
         key_raw = (uid_or_part or "").strip()
@@ -408,7 +465,6 @@ def ping(): return "pong"
 
 @app.route("/dbcheck")
 def dbcheck():
-    """Simple DB health: returns ok + estimated product count, or error."""
     try:
         client.admin.command("ping")
         n = products_col.estimated_document_count()
@@ -422,6 +478,7 @@ def favicon(): return "", 204
 # ---------------- Auth ----------------
 @app.route("/", methods=["GET","POST"])
 def login():
+    # Already logged in
     if request.method == "GET" and "username" in session:
         next_url = request.args.get("next")
         if next_url:
@@ -431,17 +488,42 @@ def login():
     if request.method == "POST":
         u = (request.form.get("username") or "").strip()
         p = (request.form.get("password") or "")
-        user = users.find_one({"username": u})
-        if user and check_password_hash(user["password"], p):
-            session["username"], session["role"] = user["username"], user["role"]
+
+        # 1) Try Mongo user login (if DB reachable)
+        try:
+            user = users.find_one({"username": u})
+            if user:
+                stored_pw = user.get("password", "")
+                if _password_matches(stored_pw, p):
+                    session["username"], session["role"] = user["username"], user.get("role", "worker")
+                    next_url = request.args.get("next") or session.pop("post_login_next", None)
+                    if next_url:
+                        return redirect(next_url)
+                    return redirect("/admin_dashboard" if session.get("role") == "admin" else "/index")
+        except Exception as e:
+            # Don't crash; fallback can still let you in
+            app.logger.exception("Login Mongo lookup failed: %s", e)
+
+        # 2) LAST RESORT: fallback admin login (works even if Mongo is down)
+        if u == FALLBACK_ADMIN["username"] and p == FALLBACK_ADMIN["password"]:
+            session["username"], session["role"] = FALLBACK_ADMIN["username"], FALLBACK_ADMIN["role"]
             next_url = request.args.get("next") or session.pop("post_login_next", None)
-            if next_url: return redirect(next_url)
-            return redirect("/admin_dashboard" if user["role"] == "admin" else "/index")
+            if next_url:
+                return redirect(next_url)
+            return redirect("/admin_dashboard")
+
         flash("Invalid credentials", "error")
+
     return render_template("login.html")
 
+# IMPORTANT: do NOT keep a public seed endpoint in production.
+# If you MUST keep it, protect it behind a secret env var.
 @app.route("/seed_users")
 def seed_users():
+    secret = os.getenv("SEED_SECRET", "")
+    if secret and request.args.get("secret") != secret:
+        return "forbidden", 403
+
     users.delete_many({})
     users.insert_many([
         {"username":"admin","password":generate_password_hash("adminpass"),"role":"admin"},
@@ -490,9 +572,6 @@ def logout():
 BASE_URL = os.getenv("BASE_URL", "https://mizitco-system.onrender.com").rstrip("/")
 
 def _qr_target_url(uid: str) -> str:
-    """
-    Build absolute URL to /item/<uid>. Uses BASE_URL if provided, else Flask _external.
-    """
     path = url_for("item_detail", uid=uid)
     if BASE_URL:
         return f"{BASE_URL}{path}"
@@ -505,7 +584,6 @@ def qr(uid: str):
     buf = BytesIO(); img.save(buf, format="PNG"); buf.seek(0)
     return send_file(buf, mimetype="image/png", download_name=f"{uid}.png")
 
-# Backward-compat: older codes that hit /scan/<uid>
 @app.route("/scan/<uid>")
 def scan_qr(uid: str):
     if "username" not in session:
@@ -513,7 +591,6 @@ def scan_qr(uid: str):
         return redirect(url_for("login", next=url_for("item_detail", uid=uid)))
     return redirect(url_for("item_detail", uid=uid))
 
-# Item detail page (login-gated)
 @app.route("/item/<uid>")
 @login_required
 def item_detail(uid: str):
@@ -540,7 +617,6 @@ def create_user():
             flash("Username and password are required.", "error")
             return render_template("new_user.html", username=u, role=role)
 
-        # prevent duplicate usernames
         if users.find_one({"username": u}):
             flash("Username already exists. Choose another.", "error")
             return render_template("new_user.html", username=u, role=role)
@@ -567,7 +643,6 @@ def profile():
     if request.method == "POST":
         action = request.form.get("action")
 
-        # Update basic info
         if action == "update_profile":
             full_name = (request.form.get("full_name") or "").strip()
             email = (request.form.get("email") or "").strip()
@@ -579,13 +654,12 @@ def profile():
             flash("Profile updated.", "success")
             return redirect(url_for("profile"))
 
-        # Change password
         if action == "change_password":
             current = request.form.get("current_password") or ""
             new1 = request.form.get("new_password") or ""
             new2 = request.form.get("confirm_password") or ""
 
-            if not check_password_hash(me.get("password", ""), current):
+            if not _password_matches(me.get("password", ""), current):
                 flash("Current password is incorrect.", "error")
                 return redirect(url_for("profile"))
 
@@ -604,10 +678,8 @@ def profile():
             flash("Password changed.", "success")
             return redirect(url_for("profile"))
 
-    # GET
     me = users.find_one({"username": session["username"]}) or {}
     return render_template("profile.html", me=me)
-
 
 # ---------------- Inventory context builder (shared) ----------------
 def _filter_sort_paginate(products_all):
@@ -764,8 +836,6 @@ def admin_logs_stub():
 # ---------------- Search ----------------
 def _render_search(role):
     result, message = [], None
-
-    # Support GET ?q=... for deep links / QR fallbacks
     q_get = (request.args.get("q") or "").strip().lower()
 
     if request.method == "POST" or q_get:
