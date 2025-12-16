@@ -3,14 +3,10 @@
 
 {% block content %}
 <style>
-  /* Match Admin Dashboard vibe (black buttons, clean table) */
   .page-title{margin:0 0 10px;font-size:2rem;font-weight:800;color:#111827}
   .muted{color:#6b7280;font-size:.95rem}
 
-  .toolbar{
-    display:flex;flex-wrap:wrap;gap:10px;align-items:center;
-    margin:10px 0 16px
-  }
+  .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0 16px}
   .toolbar label{font-weight:600;color:#334155}
   .toolbar select,.toolbar input[type="text"]{
     padding:8px 10px;border:1px solid #d1d5db;border-radius:10px;background:#fff;min-width:160px;
@@ -26,9 +22,7 @@
   }
   .btn:hover{opacity:.92}
   .btn:active{transform:translateY(1px)}
-  .btn-outline{
-    background:#fff;color:#111827;border-color:#e5e7eb
-  }
+  .btn-outline{background:#fff;color:#111827;border-color:#e5e7eb}
   .btn-outline:hover{background:#f8fafc}
 
   .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:10px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
@@ -97,15 +91,28 @@
       <tbody>
         {% for p in products %}
           <tr>
-            <td>{{ p.name }}</td>
-            <td>{{ p.readable_id }}</td>
-            <td>{{ p.volume_ml if p.volume_ml else '—' }}</td>
+            <td>{{ p.name | default('—') }}</td>
+
+            <td>{{ p.readable_id | default(p.mssid, true) | default('—') }}</td>
+
+            <td>{{ p.volume_ml | default(p.volume, true) | default('—') }}</td>
 
             <td>
               {% if p.locations %}
-                {% for L in p.locations %}
-                  <span class="chip">{{ L.area }}: <strong>{{ L.quantity }}</strong></span>
-                {% endfor %}
+                {# Case 1: locations is a dict/map like {"A1": 50, "B2": 10} #}
+                {% if p.locations is mapping %}
+                  {% for k, v in p.locations.items() %}
+                    <span class="chip">{{ k }}: <strong>{{ v }}</strong></span>
+                  {% endfor %}
+
+                {# Case 2: locations is a list like [{"area":"A1","quantity":50}, ...] OR objects with .area/.quantity #}
+                {% else %}
+                  {% for L in p.locations %}
+                    {% set area = L.area if L is not mapping else L.get('area') %}
+                    {% set qty  = L.quantity if L is not mapping else L.get('quantity') %}
+                    <span class="chip">{{ area | default('—') }}: <strong>{{ qty | default('—') }}</strong></span>
+                  {% endfor %}
+                {% endif %}
               {% else %}
                 <span class="muted">—</span>
               {% endif %}
@@ -140,10 +147,7 @@
     if(!wrap) return;
 
     const visible = wrap.style.display === 'block';
-    if(visible){
-      wrap.style.display = 'none';
-      return;
-    }
+    if(visible){ wrap.style.display = 'none'; return; }
 
     if(!wrap.querySelector('img')){
       const img = document.createElement('img');
@@ -154,7 +158,6 @@
       img.src = "{{ url_for('qr', uid='__UID__') }}".replace('__UID__', uid);
       wrap.appendChild(img);
     }
-
     wrap.style.display = 'block';
   }
 </script>
