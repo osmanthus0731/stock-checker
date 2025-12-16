@@ -1,107 +1,145 @@
-{% extends "base.html" %}
+{% extends "index.html" %}
 {% block title %}Search{% endblock %}
 
 {% block content %}
 <style>
-  .page-title{margin:0 0 10px;font-size:2rem;font-weight:800;color:#111827}
-  .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0 16px}
-  .toolbar select,.toolbar input[type="text"]{
-    padding:8px 10px;border:1px solid #d1d5db;border-radius:10px;background:#fff;outline:none
-  }
+  /* Minimal safe styling override: make it black like admin dashboard */
   .btn{
-    padding:8px 12px;border:1px solid #e5e7eb;border-radius:10px;
-    background:#111827;color:#fff;text-decoration:none;cursor:pointer
+    background:#111827 !important;
+    color:#fff !important;
+    border:1px solid #e5e7eb !important;
+    border-radius:10px !important;
+    padding:8px 12px !important;
+    cursor:pointer !important;
+    text-decoration:none !important;
+    display:inline-flex !important;
+    align-items:center !important;
+    gap:6px !important;
   }
-  .btn:hover{opacity:.9}
-  .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:10px}
+  .btn:hover{opacity:.92}
+
+  .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:10px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
   table{width:100%;border-collapse:collapse}
-  thead th{background:#f8fafc;border-bottom:1px solid #e5e7eb;padding:10px;text-align:left}
-  tbody td{border-bottom:1px solid #f1f5f9;padding:10px}
+  thead th{background:#f8fafc;border-bottom:1px solid #e5e7eb;padding:10px;text-align:left;color:#374151}
+  tbody td{border-bottom:1px solid #f1f5f9;padding:10px;vertical-align:top}
   tbody tr:hover{background:#fafafa}
-  .muted{color:#6b7280}
+  .chip{display:inline-block;background:#eef2ff;border:1px solid #e5e7eb;padding:4px 8px;border-radius:10px;margin-right:6px;margin-bottom:4px}
 </style>
 
-<h1 class="page-title">Search</h1>
+<h1>Search</h1>
 
-{# ---- SAFE action/reset: works whether route is /search or /search/<role> ---- #}
-{% if role is defined %}
-  {% set search_action = url_for(request.endpoint, role=role) %}
-{% else %}
-  {% set search_action = url_for(request.endpoint) %}
-{% endif %}
+<form method="post" class="row" style="margin:10px 0 16px; gap:10px;">
+  <input name="search_uid" placeholder="Search by UID/Name/MSSID…" style="min-width:260px"/>
 
-<form method="get" class="toolbar" action="{{ search_action }}">
-  <input type="text" name="q" value="{{ q or '' }}" placeholder="Search by UID/Name/MSSID..." />
-
+  <label>Category</label>
   <select name="filter_category">
-    {% for c in (categories | default([])) %}
-      <option value="{{ c }}" {{ 'selected' if selected_category == c }}>{{ c }}</option>
+    <option value="All">All</option>
+    {% for c in categories %}
+      {% if c != 'All' %}
+        <option value="{{ c }}">{{ c }}</option>
+      {% endif %}
     {% endfor %}
   </select>
 
+  <label>Volume</label>
   <select name="volume">
-    <option value="" {{ 'selected' if not selected_volume }}>Any</option>
-    {% for v in (volumes | default([])) %}
-      <option value="{{ v }}" {{ 'selected' if selected_volume == (v|string) }}>{{ v }} ml</option>
+    <option value="">Any</option>
+    {% for v in volumes %}
+      <option value="{{ v }}">{{ v }} ml</option>
     {% endfor %}
   </select>
 
+  <label>Pict</label>
   <select name="pict">
-    <option value="" {{ 'selected' if not selected_pict }}>Any</option>
-    <option value="__none__" {{ 'selected' if selected_pict == '__none__' }}>No Pict</option>
-    {% for pv in (pict_values | default([])) %}
-      <option value="{{ pv }}" {{ 'selected' if selected_pict == (pv|string) }}>{{ pv }}</option>
+    <option value="">Any</option>
+    {% for pv in pict_values %}
+      <option value="{{ pv }}">{{ pv }}</option>
     {% endfor %}
   </select>
 
   <button class="btn" type="submit">Search</button>
-  <a class="btn" href="{{ search_action }}">Reset</a>
 </form>
 
-{# ---- THE KEY FIX: accept different variable names ---- #}
-{% set items = (
-    products if products is defined else
-    results  if results  is defined else
-    items    if items    is defined else
-    rows     if rows     is defined else
-    []
-) %}
+{% if message %}
+  <div class="flash info">{{ message }}</div>
+{% endif %}
 
+{% if result and result|length %}
 <div class="card">
   <table>
     <thead>
       <tr>
+        <th>UID</th>
         <th>Name</th>
         <th>MSSID</th>
+        <th>Category</th>
+        <th>Pict</th>
         <th>Volume</th>
         <th>Locations</th>
-        <th>Stock</th>
-        <th>QR</th>
-        <th>Pricing</th>
+        <th>Stock</th> <!-- ✅ NEW -->
+        <th style="width:140px;">QR</th>
+        <th style="width:120px;">Pricing</th>
       </tr>
     </thead>
-
     <tbody>
-      {% if items and (items|length) > 0 %}
-        {% for p in items %}
-        <tr>
-          <td>{{ p.name }}</td>
-          <td>{{ p.mssid }}</td>
-          <td>{{ p.volume }}</td>
-          <td>{{ p.location if p.location else '—' }}</td>
-          <td>{{ p.stock if p.stock is not none else '—' }}</td>
-          <td><a class="btn" href="{{ url_for('qr', uid=p.uid) }}">QR</a></td>
-          <td><a class="btn" href="{{ url_for('view_pricing', uid=p.uid) }}">View</a></td>
-        </tr>
-        {% endfor %}
-      {% else %}
-        <tr>
-          <td colspan="7" class="muted" style="padding:14px;">
-            No results found.
-          </td>
-        </tr>
-      {% endif %}
+      {% for p in result %}
+      <tr>
+        <td>{{ p.uid }}</td>
+        <td>{{ p.name }}</td>
+        <td>{{ p.readable_id }}</td>
+        <td>{{ p.category }}</td>
+        <td>{{ p.pict if p.pict is not none else '—' }}</td>
+        <td>{{ p.volume_ml if p.volume_ml else '—' }}</td>
+
+        <td>
+          {% if p.locations %}
+            {% for L in p.locations %}
+              <span class="chip">
+                {{ L.area }}: <strong>{{ L.quantity }}</strong>
+              </span>
+            {% endfor %}
+          {% else %}
+            —
+          {% endif %}
+        </td>
+
+        <!-- ✅ STOCK (no backend changes; just display if present) -->
+        <td>
+          {{ p.stock if p.stock is not none else '—' }}
+        </td>
+
+        <td>
+          <button class="btn" type="button" onclick="toggleQR('{{ p.uid }}')">QR</button>
+          <div id="qrwrap-{{ p.uid }}" style="display:none;margin-top:8px;"></div>
+        </td>
+
+        <td>
+          <a class="btn" href="{{ url_for('view_pricing', uid=p.uid) }}">View</a>
+        </td>
+      </tr>
+      {% endfor %}
     </tbody>
   </table>
 </div>
+{% endif %}
+
+<script>
+  function toggleQR(uid){
+    const wrap = document.getElementById('qrwrap-' + uid);
+    if(!wrap) return;
+    const visible = wrap.style.display === 'block';
+    if(visible){ wrap.style.display = 'none'; return; }
+    if(!wrap.querySelector('img')){
+      const img = document.createElement('img');
+      img.width = 96; img.height = 96;
+      img.style.display = 'block';
+      img.style.border = '1px solid #eee';
+      img.style.borderRadius = '8px';
+      img.loading = 'lazy';
+      img.src = "{{ url_for('qr', uid='__UID__') }}".replace('__UID__', uid);
+      wrap.appendChild(img);
+    }
+    wrap.style.display = 'block';
+  }
+</script>
 {% endblock %}
