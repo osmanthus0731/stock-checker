@@ -5,11 +5,11 @@
 <style>
   .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0 16px}
   .toolbar label{font-weight:600;color:#334155}
-  .toolbar select,.toolbar input[type="text"]{
+  .toolbar select,.toolbar input[type="text"], .toolbar input[type="number"]{
     padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;min-width:160px;
     outline:none;transition:border-color .2s ease
   }
-  .toolbar select:focus,.toolbar input[type="text"]:focus{border-color:#6366f1}
+  .toolbar select:focus,.toolbar input:focus{border-color:#6366f1}
   .btn{
     padding:8px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#111827;color:#fff;
     text-decoration:none;display:inline-flex;align-items:center;gap:6px;cursor:pointer;
@@ -33,17 +33,14 @@
   .pagy{margin-top:14px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
   .pagy .btn{background:#fff;color:#111827;border-color:#e5e7eb}
   .pagy .btn.active{background:#111827;color:#fff}
+  .jump{display:inline-flex;align-items:center;gap:8px;margin-left:auto}
+  .jump input{min-width:90px}
 </style>
 
 <h1 style="margin:0 0 8px">Admin Dashboard</h1>
 <p class="muted" style="margin:0 0 14px;">Filter, view, and jump to pricing.</p>
 
-{% set ns = namespace(nopict=0) %}
-{% for p in products %}
-  {% if not p.pict %}{% set ns.nopict = ns.nopict + 1 %}{% endif %}
-{% endfor %}
-
-<!-- Filters (kept as-is so your existing backend/filter logic still works) -->
+<!-- Filters -->
 <form method="get" class="toolbar">
   <label>Category</label>
   <select name="filter_category">
@@ -60,16 +57,11 @@
     {% endfor %}
   </select>
 
-  <label>Pict</label>
-  <select name="pict" title="Filter by pict value">
-    <option value="" {{ 'selected' if not selected_pict }}>Any</option>
-    <option value="__none__" {{ 'selected' if selected_pict == '__none__' }}>No Pict</option>
-    {% for pv in pict_values %}
-      <option value="{{ pv }}" {{ 'selected' if selected_pict == (pv|string) }}>{{ pv }}</option>
-    {% endfor %}
-  </select>
+  <!-- Replace Pict with Location search -->
+  <label>Location</label>
+  <input type="text" name="location" placeholder="e.g. G8 / A1" value="{{ location or '' }}" />
 
-  <span class="badge" title="Rows on this page with empty/blank pict">No Pict: {{ ns.nopict }}</span>
+  <span class="badge" title="Rows on this page with empty/blank pict">No Pict: {{ nopict_count }}</span>
 
   <button class="btn" type="submit">Apply</button>
   <a class="btn" href="{{ url_for('admin_dashboard') }}" title="Clear all filters">Reset</a>
@@ -97,24 +89,16 @@
           <td>{{ p.readable_id }}</td>
           <td>{{ p.volume_ml if p.volume_ml else '—' }}</td>
 
-          <!-- ✅ Location display: locations[] -> p.location -> legacy fields -->
           <td>
-            {% set has_locations = p.locations and (p.locations|length > 0) %}
-            {% if has_locations %}
+            {% if p.locations and (p.locations|length > 0) %}
               {% for L in p.locations %}
                 <span class="chip">{{ L.area }}: <strong>{{ L.quantity }}</strong></span>
               {% endfor %}
             {% else %}
-              {% set legacy = (p.location or p.Loc_FilmBox or p.get('Loc_FilmBox') or p.get('location')) %}
-              {% if legacy %}
-                <span class="chip">{{ legacy }}: <strong>{{ p.stock if p.stock is not none else 0 }}</strong></span>
-              {% else %}
-                <span class="muted">—</span>
-              {% endif %}
+              <span class="muted">—</span>
             {% endif %}
           </td>
 
-          <!-- Stock (from MongoDB) -->
           <td>
             {% if p.stock is not none %}
               <strong>{{ p.stock }}</strong>
@@ -140,17 +124,50 @@
 
 {% if total_pages > 1 %}
   <div class="pagy">
+    <!-- Always show first page -->
+    {% if page == 1 %}
+      <span class="btn active">1</span>
+    {% else %}
+      <a class="btn" href="{{ url_for('admin_dashboard', page=1, filter_category=selected_category, volume=selected_volume, location=location) }}">1</a>
+    {% endif %}
+
+    {% if pages[0] > 2 %}
+      <span class="muted">…</span>
+    {% endif %}
+
+    <!-- Middle window pages -->
     {% for i in pages %}
-      {% if i == page %}
-        <span class="btn active">{{ i }}</span>
-      {% else %}
-        <a class="btn" href="{{ url_for('admin_dashboard', page=i, filter_category=selected_category, volume=selected_volume, pict=selected_pict) }}">{{ i }}</a>
+      {% if i != 1 and i != total_pages %}
+        {% if i == page %}
+          <span class="btn active">{{ i }}</span>
+        {% else %}
+          <a class="btn" href="{{ url_for('admin_dashboard', page=i, filter_category=selected_category, volume=selected_volume, location=location) }}">{{ i }}</a>
+        {% endif %}
       {% endif %}
     {% endfor %}
-    {% if pages[-1] < total_pages %}
+
+    {% if pages[-1] < total_pages - 1 %}
       <span class="muted">…</span>
-      <a class="btn" href="{{ url_for('admin_dashboard', page=total_pages, filter_category=selected_category, volume=selected_volume, pict=selected_pict) }}">{{ total_pages }}</a>
     {% endif %}
+
+    <!-- Always show last page -->
+    {% if total_pages > 1 %}
+      {% if page == total_pages %}
+        <span class="btn active">{{ total_pages }}</span>
+      {% else %}
+        <a class="btn" href="{{ url_for('admin_dashboard', page=total_pages, filter_category=selected_category, volume=selected_volume, location=location) }}">{{ total_pages }}</a>
+      {% endif %}
+    {% endif %}
+
+    <!-- Jump to page -->
+    <form method="get" class="jump">
+      <input type="hidden" name="filter_category" value="{{ selected_category }}">
+      <input type="hidden" name="volume" value="{{ selected_volume }}">
+      <input type="hidden" name="location" value="{{ location }}">
+      <label class="muted">Go to page</label>
+      <input type="number" name="page" min="1" max="{{ total_pages }}" value="{{ page }}" />
+      <button class="btn" type="submit">Go</button>
+    </form>
   </div>
 {% endif %}
 

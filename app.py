@@ -622,7 +622,7 @@ def profile():
 def _filter_sort_paginate(products_all):
     selected_cat = (request.values.get("filter_category") or "All").strip()
     selected_vol = (request.values.get("volume") or "").strip()
-    selected_pict = (request.values.get("pict") or "").strip()
+    location_q = (request.values.get("location") or "").strip().lower()
 
     if selected_cat and selected_cat != "All":
         products_all = [p for p in products_all if (p.get("category") or "Uncategorized") == selected_cat]
@@ -634,20 +634,27 @@ def _filter_sort_paginate(products_all):
         except Exception:
             pass
 
-    if selected_pict:
-        try:
-            pv = int(selected_pict)
-            products_all = [p for p in products_all if (p.get("pict") is not None and p.get("pict") == pv)]
-        except Exception:
-            pass
+    # ✅ Location filter: match if ANY location area contains the query
+    if location_q:
+        def matches_location(p):
+            locs = p.get("locations") or []
+            for L in locs:
+                area = (L.get("area") or "").strip().lower()
+                if location_q in area:
+                    return True
+            return False
+        products_all = [p for p in products_all if matches_location(p)]
 
+    # Pagination (page from querystring)
     page = request.args.get("page", 1, type=int)
     total_items = len(products_all)
     total_pages = max(1, (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
     page = max(1, min(page, total_pages))
+
     start, end = (page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE
     paginated = products_all[start:end]
 
+    # window pages (middle)
     window = 5
     half = window // 2
     start_p = max(1, page - half)
@@ -655,29 +662,33 @@ def _filter_sort_paginate(products_all):
     start_p = max(1, end_p - window + 1)
     pages = list(range(start_p, end_p + 1))
 
-    return paginated, total_items, total_pages, pages, page
+    return paginated, total_items, total_pages, pages, page, location_q
 
 def _inventory_ctx_from_mongo():
     products_all = list(_all_products_from_mongo())
-    paginated, total_items, total_pages, pages, page = _filter_sort_paginate(products_all)
+    paginated, total_items, total_pages, pages, page, location_q = _filter_sort_paginate(products_all)
 
     cats = sorted({p.get("category") or "Uncategorized" for p in products_all})
     vols = sorted({int(p["volume_ml"]) for p in products_all if p.get("volume_ml")})
-    pict_values = sorted({p["pict"] for p in products_all if p.get("pict") is not None})
+
+    # (Optional) quick count of products with no pict still used by UI badge
+    nopict_count = sum(1 for p in paginated if not p.get("pict"))
 
     return {
         "products": paginated,
         "categories": ["All"] + cats,
         "volumes": vols,
-        "pict_values": pict_values,
+
         "selected_category": (request.values.get("filter_category") or "All").strip(),
         "selected_volume": (request.values.get("volume") or "").strip(),
-        "selected_pict": (request.values.get("pict") or "").strip(),
+        "location": (request.values.get("location") or "").strip(),  # keep original casing for textbox
+
         "page": page,
         "total_pages": total_pages,
         "pages": pages,
         "per_page": ITEMS_PER_PAGE,
         "total_items": total_items,
+        "nopict_count": nopict_count,
     }
 
 def _inventory_ctx():
