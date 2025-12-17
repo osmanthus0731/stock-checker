@@ -68,6 +68,7 @@
     {% endfor %}
   </select>
 
+  <!-- 🔒 VOLUME UNCHANGED -->
   <label>Volume</label>
   <select name="volume">
     <option value="">Any</option>
@@ -76,11 +77,12 @@
     {% endfor %}
   </select>
 
-  <label>Pict</label>
-  <select name="pict">
+  <!-- ✅ PICT → LOCATION -->
+  <label>Location</label>
+  <select name="location">
     <option value="">Any</option>
-    {% for pv in pict_values %}
-      <option value="{{ pv }}">{{ pv }}</option>
+    {% for loc in locations_list %}
+      <option value="{{ loc }}">{{ loc }}</option>
     {% endfor %}
   </select>
 
@@ -115,7 +117,6 @@
         <td>{{ p.category }}</td>
         <td>{{ p.volume_ml if p.volume_ml else '—' }}</td>
 
-        <!-- ✅ Locations: locations[] -> p.location -> legacy fields -->
         <td>
           {% set has_locations = p.locations and (p.locations|length > 0) %}
           {% if has_locations %}
@@ -136,7 +137,6 @@
           {% endif %}
         </td>
 
-        <!-- STOCK -->
         <td>
           {{ p.stock if p.stock is not none else '—' }}
         </td>

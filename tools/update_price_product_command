@@ -1,0 +1,6 @@
+#venv\Scripts\activate
+#cd C:\Users\mizit\Downloads\inventory-app-access-live\inventory-app-access-live
+#python tools\import_products_from_access.py
+#python tools\import_pricing_from_access.py
+
+#when run command do not add # into the command
