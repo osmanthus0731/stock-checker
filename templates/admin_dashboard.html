@@ -10,6 +10,7 @@
     outline:none;transition:border-color .2s ease
   }
   .toolbar select:focus,.toolbar input:focus{border-color:#6366f1}
+
   .btn{
     padding:8px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#111827;color:#fff;
     text-decoration:none;display:inline-flex;align-items:center;gap:6px;cursor:pointer;
@@ -30,17 +31,19 @@
   .chip{display:inline-block;background:#eef2ff;border:1px solid #e5e7eb;padding:4px 8px;border-radius:999px;margin:0 6px 6px 0;font-size:.85rem;white-space:nowrap}
   .badge{display:inline-block;background:#f1f5f9;border:1px solid #e5e7eb;color:#334155;padding:2px 8px;border-radius:999px;font-size:.8rem}
   .qrimg{display:block;border:1px solid #eee;border-radius:8px;margin-top:8px}
-  .pagy{margin-top:14px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+
+  .pagy{margin-top:14px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
   .pagy .btn{background:#fff;color:#111827;border-color:#e5e7eb}
   .pagy .btn.active{background:#111827;color:#fff}
-  .jump{display:inline-flex;align-items:center;gap:8px;margin-left:auto}
-  .jump input{min-width:90px}
+  .pages-left{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .jump{display:inline-flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap}
+  .jump input{min-width:110px}
+  .tiny{font-size:.85rem}
 </style>
 
 <h1 style="margin:0 0 8px">Admin Dashboard</h1>
 <p class="muted" style="margin:0 0 14px;">Filter, view, and jump to pricing.</p>
 
-<!-- Filters -->
 <form method="get" class="toolbar">
   <label>Category</label>
   <select name="filter_category">
@@ -57,7 +60,6 @@
     {% endfor %}
   </select>
 
-  <!-- Replace Pict with Location search -->
   <label>Location</label>
   <input type="text" name="location" placeholder="e.g. G8 / A1" value="{{ location or '' }}" />
 
@@ -124,50 +126,55 @@
 
 {% if total_pages > 1 %}
   <div class="pagy">
-    <!-- Always show first page -->
-    {% if page == 1 %}
-      <span class="btn active">1</span>
-    {% else %}
-      <a class="btn" href="{{ url_for('admin_dashboard', page=1, filter_category=selected_category, volume=selected_volume, location=location) }}">1</a>
-    {% endif %}
-
-    {% if pages[0] > 2 %}
-      <span class="muted">…</span>
-    {% endif %}
-
-    <!-- Middle window pages -->
-    {% for i in pages %}
-      {% if i != 1 and i != total_pages %}
-        {% if i == page %}
-          <span class="btn active">{{ i }}</span>
-        {% else %}
-          <a class="btn" href="{{ url_for('admin_dashboard', page=i, filter_category=selected_category, volume=selected_volume, location=location) }}">{{ i }}</a>
-        {% endif %}
+    <div class="pages-left">
+      <!-- first page -->
+      {% if page == 1 %}
+        <span class="btn active">1</span>
+      {% else %}
+        <a class="btn" href="{{ url_for('admin_dashboard', page=1, filter_category=selected_category, volume=selected_volume, location=location) }}">1</a>
       {% endif %}
-    {% endfor %}
 
-    {% if pages[-1] < total_pages - 1 %}
-      <span class="muted">…</span>
-    {% endif %}
+      {% if pages and pages[0] > 2 %}
+        <span class="muted">…</span>
+      {% endif %}
 
-    <!-- Always show last page -->
-    {% if total_pages > 1 %}
+      <!-- window -->
+      {% for i in pages %}
+        {% if i != 1 and i != total_pages %}
+          {% if i == page %}
+            <span class="btn active">{{ i }}</span>
+          {% else %}
+            <a class="btn" href="{{ url_for('admin_dashboard', page=i, filter_category=selected_category, volume=selected_volume, location=location) }}">{{ i }}</a>
+          {% endif %}
+        {% endif %}
+      {% endfor %}
+
+      {% if pages and pages[-1] < total_pages - 1 %}
+        <span class="muted">…</span>
+      {% endif %}
+
+      <!-- last page -->
       {% if page == total_pages %}
         <span class="btn active">{{ total_pages }}</span>
       {% else %}
         <a class="btn" href="{{ url_for('admin_dashboard', page=total_pages, filter_category=selected_category, volume=selected_volume, location=location) }}">{{ total_pages }}</a>
       {% endif %}
-    {% endif %}
 
-    <!-- Jump to page -->
-    <form method="get" class="jump">
-      <input type="hidden" name="filter_category" value="{{ selected_category }}">
-      <input type="hidden" name="volume" value="{{ selected_volume }}">
-      <input type="hidden" name="location" value="{{ location }}">
-      <label class="muted">Go to page</label>
-      <input type="number" name="page" min="1" max="{{ total_pages }}" value="{{ page }}" />
-      <button class="btn" type="submit">Go</button>
-    </form>
+      <span class="muted tiny">
+        ({{ ((page-1)*per_page + 1) }}–{{ [page*per_page, total_items]|min }} of {{ total_items }})
+      </span>
+    </div>
+
+    <!-- ✅ Instant "Go to page" -->
+    <div class="jump">
+      <span class="muted">Go to page</span>
+      <input id="pageJump"
+             type="number"
+             min="1"
+             max="{{ total_pages }}"
+             value="{{ page }}"
+             inputmode="numeric" />
+    </div>
   </div>
 {% endif %}
 
@@ -194,5 +201,35 @@
 
     wrap.style.display = 'block';
   }
+
+  // ✅ Instant page jump (Enter OR leaving the input)
+  (function(){
+    const inp = document.getElementById("pageJump");
+    if(!inp) return;
+
+    const totalPages = {{ total_pages|int }};
+
+    function go(){
+      let p = parseInt(inp.value || "1", 10);
+      if(!Number.isFinite(p)) p = 1;
+      p = Math.max(1, Math.min(totalPages, p));
+
+      const url = new URL(window.location.href);
+      url.searchParams.set("page", String(p));
+      window.location.href = url.toString();
+    }
+
+    inp.addEventListener("keydown", (e) => {
+      if(e.key === "Enter"){
+        e.preventDefault();
+        go();
+      }
+    });
+
+    inp.addEventListener("blur", () => {
+      // blur jump feels "instant" without extra button
+      go();
+    });
+  })();
 </script>
 {% endblock %}
