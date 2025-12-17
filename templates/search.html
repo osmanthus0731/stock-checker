@@ -55,15 +55,24 @@
 
 <h1>Search</h1>
 
+{# keep selected values after submit #}
+{% set selected_category = request.form.get('filter_category', 'All') %}
+{% set selected_volume   = request.form.get('volume', '') %}
+{% set selected_location = request.form.get('location', '') %}
+{% set selected_query    = request.form.get('search_uid', '') %}
+
 <form method="post" class="row" style="margin:10px 0 16px; gap:10px;">
-  <input name="search_uid" placeholder="Search by UID/Name/MSSID…" style="min-width:260px"/>
+  <input name="search_uid"
+         placeholder="Search by UID/Name/MSSID…"
+         style="min-width:260px"
+         value="{{ selected_query }}"/>
 
   <label>Category</label>
   <select name="filter_category">
-    <option value="All">All</option>
+    <option value="All" {% if selected_category == 'All' %}selected{% endif %}>All</option>
     {% for c in categories %}
       {% if c != 'All' %}
-        <option value="{{ c }}">{{ c }}</option>
+        <option value="{{ c }}" {% if selected_category == c %}selected{% endif %}>{{ c }}</option>
       {% endif %}
     {% endfor %}
   </select>
@@ -71,18 +80,18 @@
   <!-- 🔒 VOLUME UNCHANGED -->
   <label>Volume</label>
   <select name="volume">
-    <option value="">Any</option>
+    <option value="" {% if selected_volume == '' %}selected{% endif %}>Any</option>
     {% for v in volumes %}
-      <option value="{{ v }}">{{ v }} ml</option>
+      <option value="{{ v }}" {% if selected_volume == (v|string) %}selected{% endif %}>{{ v }} ml</option>
     {% endfor %}
   </select>
 
-  <!-- ✅ PICT → LOCATION -->
+  <!-- ✅ LOCATION: Any + all options -->
   <label>Location</label>
   <select name="location">
-    <option value="">Any</option>
+    <option value="" {% if selected_location == '' %}selected{% endif %}>Any</option>
     {% for loc in locations_list %}
-      <option value="{{ loc }}">{{ loc }}</option>
+      <option value="{{ loc }}" {% if selected_location == loc %}selected{% endif %}>{{ loc }}</option>
     {% endfor %}
   </select>
 
