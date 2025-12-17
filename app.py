@@ -1,9 +1,9 @@
 # app.py — Mongo-first (Vercel-safe) inventory app with login + user management
-# - Users stored in MongoDB (supports hashed OR plaintext stored passwords)
-# - Auto-upgrades plaintext passwords to hashes after first successful login
-# - Optional fallback admin (works even if Mongo is down)
-# - Optional bootstrap admin if users collection is empty (disabled by default)
-# - Access integration kept but auto-disabled on Vercel/Linux (won’t break deploy)
+# Updates in this version:
+# ✅ Supports legacy/single-location field from Access/Mongo:
+#    - If a product document contains "Loc_FilmBox" (or "location") it will be normalized into locations[]
+# ✅ Adds FIELD_MAP so when your code/UI says "location", Mongo uses "Loc_FilmBox" (schema-safe)
+# ✅ Adds small helpers to read/write location consistently
 
 from flask import (
     Flask, render_template, render_template_string, request, redirect, url_for,
@@ -31,6 +31,18 @@ if not MONGO_URI:
 
 # Optional: force Mongo-only even on Windows
 FORCE_MONGO_ONLY = os.getenv("FORCE_MONGO_ONLY", "0") == "1"
+
+# ---------------- Field mapping (UI/form -> DB schema) ----------------
+# Your UI/app can keep using "location" while Mongo stores "Loc_FilmBox".
+FIELD_MAP = {
+    "location": "Loc_FilmBox",
+}
+
+def map_field(ui_field: str) -> str:
+    return FIELD_MAP.get(ui_field, ui_field)
+
+# If you ever need the reverse (DB -> UI), keep it here:
+DB_TO_UI = {v: k for k, v in FIELD_MAP.items()}
 
 # ---------------- Emergency fallback admin (LAST RESORT) ----------------
 FALLBACK_ADMIN = {
@@ -119,8 +131,10 @@ def _bootstrap_admin_if_needed():
                 "created_at": int(time.time()),
                 "bootstrap": True,
             })
-            app.logger.warning("Bootstrapped admin user '%s' (users collection was empty).",
-                               BOOTSTRAP_ADMIN["username"])
+            app.logger.warning(
+                "Bootstrapped admin user '%s' (users collection was empty).",
+                BOOTSTRAP_ADMIN["username"]
+            )
     except Exception as e:
         app.logger.exception("Bootstrap admin failed: %s", e)
 
@@ -171,7 +185,6 @@ def _access_conn():
 
 # ---------------- Inventory helpers ----------------
 ITEMS_PER_PAGE = 5
-
 _VOL_RE = re.compile(r"(\d{1,5})\s*ml\b", re.IGNORECASE)
 
 def _extract_volume_ml(text: str):
@@ -185,7 +198,44 @@ def _extract_volume_ml(text: str):
     except Exception:
         return None
 
+def _coerce_int(x, default=0):
+    try:
+        if x is None:
+            return default
+        s = str(x).strip()
+        if s == "":
+            return default
+        return int(float(s))
+    except Exception:
+        return default
+
+def _normalize_locations_from_legacy_fields(p: dict):
+    """
+    If product has legacy single-location field (Access/Mongo):
+      - "Loc_FilmBox" (preferred legacy field)
+      - OR "location" (older app field)
+    then convert it into locations[] if locations is missing.
+    """
+    legacy_loc = (p.get("Loc_FilmBox") or p.get("location") or "").strip()
+    if not legacy_loc:
+        return None
+    return legacy_loc
+
 def _normalize_mongo_product(p: dict) -> dict:
+    if not p:
+        return {
+            "uid": "",
+            "name": "",
+            "readable_id": "",
+            "category": "Uncategorized",
+            "pict": None,
+            "stock": 0,
+            "volume_ml": None,
+            "locations": [],
+            # convenience
+            "location": "",
+        }
+
     out = {
         "uid": p.get("uid", "") or p.get("Part_id", ""),
         "name": p.get("name", "") or p.get("Desc", ""),
@@ -195,29 +245,46 @@ def _normalize_mongo_product(p: dict) -> dict:
         "stock": p.get("stock"),
         "volume_ml": p.get("volume_ml"),
     }
-    locs = p.get("locations") or {}
-    if isinstance(locs, dict):
-        out["locations"] = [{"area": k, "quantity": int(v) if str(v).strip() else 0} for k, v in locs.items()]
-    elif isinstance(locs, list):
-        norm = []
-        for L in locs:
-            area = (L.get("area") or L.get("loc") or "").strip()
-            qty = L.get("quantity")
-            try:
-                qty = int(qty)
-            except Exception:
-                qty = 0
-            if area:
-                norm.append({"area": area, "quantity": qty})
-        out["locations"] = norm
-    else:
-        out["locations"] = []
 
+    # Primary structured locations (dict or list)
+    locs = p.get("locations") or {}
+    normalized_locations = []
+
+    if isinstance(locs, dict):
+        normalized_locations = [
+            {"area": str(k).strip(), "quantity": _coerce_int(v, 0)}
+            for k, v in locs.items()
+            if str(k).strip()
+        ]
+    elif isinstance(locs, list):
+        for L in locs:
+            if not isinstance(L, dict):
+                continue
+            area = (L.get("area") or L.get("loc") or "").strip()
+            qty = _coerce_int(L.get("quantity"), 0)
+            if area:
+                normalized_locations.append({"area": area, "quantity": qty})
+
+    # ✅ Legacy single-location fallback (Loc_FilmBox / location)
+    if not normalized_locations:
+        legacy_loc = _normalize_locations_from_legacy_fields(p)
+        if legacy_loc:
+            # If there is a stock value, use it as qty; else 0.
+            legacy_qty = _coerce_int(p.get("stock"), 0)
+            normalized_locations = [{"area": legacy_loc, "quantity": legacy_qty}]
+
+    out["locations"] = normalized_locations
+
+    # Volume auto-extract
     if out.get("volume_ml") is None:
         out["volume_ml"] = _extract_volume_ml(out.get("name", "")) or _extract_volume_ml(out.get("readable_id", ""))
 
+    # Stock auto-sum (if missing)
     if out.get("stock") is None:
         out["stock"] = sum((i.get("quantity") or 0) for i in out["locations"])
+
+    # Convenience single location (first location, if any)
+    out["location"] = out["locations"][0]["area"] if out["locations"] else ""
 
     return out
 
