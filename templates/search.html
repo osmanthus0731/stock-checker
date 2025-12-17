@@ -50,6 +50,7 @@
     margin-right:6px;
     margin-bottom:4px
   }
+  .muted{color:#6b7280}
 </style>
 
 <h1>Search</h1>
@@ -114,15 +115,24 @@
         <td>{{ p.category }}</td>
         <td>{{ p.volume_ml if p.volume_ml else '—' }}</td>
 
+        <!-- ✅ Locations: locations[] -> p.location -> legacy fields -->
         <td>
-          {% if p.locations %}
+          {% set has_locations = p.locations and (p.locations|length > 0) %}
+          {% if has_locations %}
             {% for L in p.locations %}
               <span class="chip">
                 {{ L.area }}: <strong>{{ L.quantity }}</strong>
               </span>
             {% endfor %}
           {% else %}
-            —
+            {% set legacy = (p.location or p.get('Loc_FilmBox') or p.get('location')) %}
+            {% if legacy %}
+              <span class="chip">
+                {{ legacy }}: <strong>{{ p.stock if p.stock is not none else 0 }}</strong>
+              </span>
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
           {% endif %}
         </td>
 
