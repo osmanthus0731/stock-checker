@@ -26,6 +26,7 @@ FORCE_MONGO_ONLY = os.getenv("FORCE_MONGO_ONLY", "0") == "1"
 
 # ---------------- Field mapping (UI/form -> DB schema) ----------------
 FIELD_MAP = {"location": "Loc_FilmBox"}
+
 def map_field(ui_field: str) -> str:
     return FIELD_MAP.get(ui_field, ui_field)
 
@@ -121,30 +122,6 @@ def add_no_cache_headers(resp):
         resp.headers["Pragma"] = "no-cache"
         resp.headers["Expires"] = "0"
     return resp
-
-# ---------------- Access config (auto-disabled on Vercel/Linux) ----------------
-ACCESS_DB_PATH = (os.getenv("ACCESS_DB_PATH") or "").strip()
-ACCESS_TABLE = (os.getenv("ACCESS_TABLE") or "ITMMST").strip()
-ACCESS_PRICE_TABLE = (os.getenv("ACCESS_PRICE_TABLE") or "Cus_Price").strip()
-
-ODBC_LIB = None
-_odbc = None
-if not FORCE_MONGO_ONLY and os.name == "nt" and ACCESS_DB_PATH:
-    try:
-        import pyodbc as _odbc
-        ODBC_LIB = "pyodbc"
-    except Exception:
-        try:
-            import pypyodbc as _odbc
-            ODBC_LIB = "pypyodbc"
-        except Exception:
-            _odbc = None
-            ODBC_LIB = None
-
-def _should_use_access():
-    if FORCE_MONGO_ONLY:
-        return False
-    return (os.name == "nt") and bool(ACCESS_DB_PATH) and os.path.exists(ACCESS_DB_PATH) and (_odbc is not None)
 
 # ---------------- Inventory helpers ----------------
 ITEMS_PER_PAGE = 5
@@ -267,7 +244,7 @@ def _all_products():
 def _get_product_by_uid(uid: str):
     return _get_product_by_uid_mongo(uid)
 
-# ✅ IMPORTANT: location dropdown list builder (fixes your NameError)
+# ✅ Location dropdown list builder (search page)
 def _all_locations_list():
     rows = _all_products()
     loc_set = set()
@@ -276,7 +253,7 @@ def _all_locations_list():
             area = (L.get("area") or "").strip()
             if area:
                 loc_set.add(area)
-        legacy = (p.get("location") or "").strip()
+        legacy = (p.get("Loc_FilmBox") or p.get("location") or "").strip()
         if legacy:
             loc_set.add(legacy)
     return sorted(loc_set)
@@ -388,7 +365,6 @@ def login():
         u = (request.form.get("username") or "").strip()
         p = (request.form.get("password") or "")
 
-        # Mongo user login
         try:
             user = users.find_one({"username": u})
             if user:
@@ -399,25 +375,23 @@ def login():
                             {"_id": user["_id"]},
                             {"$set": {"password": generate_password_hash(p), "upgraded_at": int(time.time())}}
                         )
-
                     session["username"] = user.get("username", u)
                     session["role"] = user.get("role", "worker")
 
                     next_url = request.args.get("next") or session.pop("post_login_next", None)
                     if next_url:
                         return redirect(next_url)
-                    return redirect("/admin_dashboard" if session.get("role") == "admin" else "/index")
+                    return redirect(url_for("admin_dashboard") if session.get("role") == "admin" else url_for("index"))
         except Exception as e:
             app.logger.exception("Login Mongo lookup failed: %s", e)
 
-        # fallback admin
         if u == FALLBACK_ADMIN["username"] and p == FALLBACK_ADMIN["password"]:
             session["username"] = FALLBACK_ADMIN["username"]
             session["role"] = FALLBACK_ADMIN["role"]
             next_url = request.args.get("next") or session.pop("post_login_next", None)
             if next_url:
                 return redirect(next_url)
-            return redirect("/admin_dashboard")
+            return redirect(url_for("admin_dashboard"))
 
         flash("Invalid credentials", "error")
 
@@ -570,26 +544,77 @@ def profile():
     me = users.find_one({"username": session["username"]}) or {}
     return render_template("profile.html", me=me)
 
-# ---------------- Inventory page ctx ----------------
+# ---------------- Dashboard pagination + filters ----------------
+def _matches_location(p, q: str) -> bool:
+    q = (q or "").strip().lower()
+    if not q:
+        return True
+    for L in (p.get("locations") or []):
+        area = (L.get("area") or "").strip().lower()
+        if q in area:
+            return True
+    legacy = (p.get("Loc_FilmBox") or p.get("location") or "").strip().lower()
+    return bool(legacy) and (q in legacy)
+
+def _filter_sort_paginate(products_all):
+    selected_cat = (request.args.get("filter_category") or "All").strip()
+    selected_vol = (request.args.get("volume") or "").strip()
+    location_q = (request.args.get("location") or "").strip()
+
+    if selected_cat != "All":
+        products_all = [p for p in products_all if (p.get("category") or "Uncategorized") == selected_cat]
+
+    if selected_vol:
+        try:
+            v = int(selected_vol)
+            products_all = [p for p in products_all if p.get("volume_ml") == v]
+        except Exception:
+            pass
+
+    if location_q:
+        products_all = [p for p in products_all if _matches_location(p, location_q)]
+
+    page = request.args.get("page", 1, type=int)
+    total_items = len(products_all)
+    total_pages = max(1, (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
+    page = max(1, min(page, total_pages))
+
+    start = (page - 1) * ITEMS_PER_PAGE
+    end = start + ITEMS_PER_PAGE
+    paginated = products_all[start:end]
+
+    window = 5
+    half = window // 2
+    start_p = max(1, page - half)
+    end_p = min(total_pages, start_p + window - 1)
+    start_p = max(1, end_p - window + 1)
+    pages = list(range(start_p, end_p + 1))
+
+    return paginated, total_items, total_pages, pages, page
+
 def _inventory_ctx_from_mongo():
     products_all = list(_all_products_from_mongo())
+    paginated, total_items, total_pages, pages, page = _filter_sort_paginate(products_all)
 
     cats = sorted({p.get("category") or "Uncategorized" for p in products_all})
     vols = sorted({int(p["volume_ml"]) for p in products_all if p.get("volume_ml")})
 
     return {
-        "products": products_all[:ITEMS_PER_PAGE],  # simple view
+        "products": paginated,
         "categories": ["All"] + cats,
         "volumes": vols,
-        "selected_category": (request.values.get("filter_category") or "All").strip(),
-        "selected_volume": (request.values.get("volume") or "").strip(),
-        "location": (request.values.get("location") or "").strip(),
-        "page": 1,
-        "total_pages": 1,
-        "pages": [1],
+
+        "selected_category": (request.args.get("filter_category") or "All").strip(),
+        "selected_volume": (request.args.get("volume") or "").strip(),
+        "location": (request.args.get("location") or "").strip(),
+
+        "page": page,
+        "total_pages": total_pages,
+        "pages": pages,
         "per_page": ITEMS_PER_PAGE,
-        "total_items": len(products_all),
-        "nopict_count": sum(1 for p in products_all[:ITEMS_PER_PAGE] if not p.get("pict")),
+        "total_items": total_items,
+
+        "nopict_count": sum(1 for p in paginated if not p.get("pict")),
     }
 
 def _inventory_ctx():
@@ -622,15 +647,17 @@ def calculator_page():
     return render_template("calculator.html", prices=prices, uid=uid)
 
 # ---------------- Dashboards ----------------
-@app.route("/admin_dashboard", methods=["GET", "POST"])
+@app.route("/admin_dashboard", methods=["GET"])
 @role_required("admin")
 def admin_dashboard():
     return render_template("admin_dashboard.html", role="admin", **_inventory_ctx())
 
-@app.route("/index", methods=["GET", "POST"])
+@app.route("/index", methods=["GET"])
 @role_required("worker")
 def index():
-    return render_template("index.html", role="worker", **_inventory_ctx())
+    # If you want workers to also paginate, change this to **_inventory_ctx()
+    ctx = _inventory_ctx()
+    return render_template("index.html", role="worker", **ctx)
 
 # ---------------- Read-only stubs ----------------
 @app.route("/update_stock/<uid>", methods=["GET", "POST"])
@@ -706,15 +733,7 @@ def _render_search(role):
                 pass
 
         if selected_location:
-            def matches_location(p):
-                for L in (p.get("locations") or []):
-                    area = (L.get("area") or "").strip().lower()
-                    if selected_location in area:
-                        return True
-                legacy = (p.get("location") or "").strip().lower()
-                return selected_location in legacy if legacy else False
-
-            rows = [p for p in rows if matches_location(p)]
+            rows = [p for p in rows if _matches_location(p, selected_location)]
 
         result = rows
         if not result:
