@@ -710,6 +710,18 @@ def debug_pricing(uid):
     prices = _get_prices_for_part(uid)
     return prices or {"ok": False, "msg": "No pricing found in Mongo"}
 
+#calc#
+@app.route("/calculator", methods=["GET"])
+@login_required
+def calculator_page():
+    uid = (request.args.get("uid") or "").strip()
+    prices = _get_prices_for_part(uid) if uid else None
+
+    if uid and not prices:
+        flash("No pricing found for that UID/MSSID.", "info")
+
+    return render_template("calculator.html", prices=prices, uid=uid)
+
 # ---------------- Dashboards ----------------
 @app.route("/admin_dashboard", methods=["GET", "POST"])
 @role_required("admin")
@@ -763,14 +775,18 @@ def _render_search(role):
     result, message = [], None
     q_get = (request.args.get("q") or "").strip().lower()
 
+    # ✅ location dropdown options (always available)
+    locations_list = _all_locations_list()
+
     if request.method == "POST" or q_get:
         q = (request.form.get("search_uid") or q_get or "").strip().lower()
         selected_cat = (request.values.get("filter_category") or "All").strip()
         selected_vol = (request.values.get("volume") or "").strip()
-        selected_pict = (request.values.get("pict") or "").strip()
+        selected_location = (request.values.get("location") or "").strip().lower()
 
         rows = _all_products()
 
+        # search keywords (uid/name/mssid)
         if q:
             keys = q.split()
             rows = [
@@ -782,9 +798,11 @@ def _render_search(role):
                 ]).lower() for k in keys)
             ]
 
+        # category filter
         if selected_cat != "All":
             rows = [p for p in rows if (p.get("category") or "Uncategorized") == selected_cat]
 
+        # volume filter
         if selected_vol:
             try:
                 v = int(selected_vol)
@@ -792,12 +810,18 @@ def _render_search(role):
             except Exception:
                 pass
 
-        if selected_pict:
-            try:
-                pv = int(selected_pict)
-                rows = [p for p in rows if (p.get("pict") is not None and p.get("pict") == pv)]
-            except Exception:
-                pass
+        # ✅ location filter
+        if selected_location:
+            def matches_location(p):
+                for L in (p.get("locations") or []):
+                    area = (L.get("area") or "").strip().lower()
+                    if selected_location in area:
+                        return True
+                # fallback
+                legacy = (p.get("location") or "").strip().lower()
+                return selected_location in legacy if legacy else False
+
+            rows = [p for p in rows if matches_location(p)]
 
         result = rows
         if not result:
@@ -806,7 +830,6 @@ def _render_search(role):
     all_rows = _all_products()
     cats = sorted({p.get("category") or "Uncategorized" for p in all_rows})
     vols = sorted({int(p["volume_ml"]) for p in all_rows if p.get("volume_ml")})
-    pict_values = sorted({p["pict"] for p in all_rows if p.get("pict") is not None})
 
     return render_template(
         "search.html",
@@ -815,7 +838,7 @@ def _render_search(role):
         role=role,
         categories=["All"] + cats,
         volumes=vols,
-        pict_values=pict_values,
+        locations_list=locations_list,   
     )
 
 @app.route("/search/admin", methods=["GET", "POST"])

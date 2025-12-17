@@ -1,8 +1,127 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="card">
-  <h2>Worker Home</h2>
-  <p class="muted">Read-only view of products from Access.</p>
-  {% include "parts/product_table.html" %}
+
+<style>
+  .layout{
+    display:grid;
+    grid-template-columns: 240px 1fr;
+    gap:16px;
+    align-items:start;
+  }
+  .sidebar{
+    background:#fff;
+    border:1px solid #e5e7eb;
+    border-radius:14px;
+    padding:12px;
+    box-shadow:0 1px 2px rgba(0,0,0,.04);
+    position:sticky;
+    top:12px;
+  }
+  .nav-title{
+    font-weight:800;
+    margin:6px 8px 10px;
+    color:#111827;
+  }
+  .nav-link{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:10px 10px;
+    border-radius:10px;
+    text-decoration:none;
+    color:#111827;
+    border:1px solid transparent;
+  }
+  .nav-link:hover{
+    background:#f9fafb;
+    border-color:#e5e7eb;
+  }
+  .nav-link.active{
+    background:#111827;
+    color:#fff;
+    border-color:#111827;
+  }
+  .divider{
+    height:1px;
+    background:#e5e7eb;
+    margin:10px 0;
+  }
+  .pill{
+    display:inline-block;
+    padding:4px 10px;
+    border-radius:999px;
+    background:#f3f4f6;
+    border:1px solid #e5e7eb;
+    font-size:12px;
+    color:#111827;
+    margin-left:8px;
+  }
+</style>
+
+<div class="layout">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="nav-title">
+      Menu
+      <span class="pill">{{ session.get('role','')|capitalize }}</span>
+    </div>
+
+    {# Worker dashboard is /index, Admin dashboard is /admin_dashboard #}
+    {% set path = request.path %}
+
+    {% if session.get('role') == 'admin' %}
+      <a class="nav-link {% if path.startswith('/admin_dashboard') %}active{% endif %}"
+         href="{{ url_for('admin_dashboard') }}">Dashboard</a>
+
+      <a class="nav-link {% if path.startswith('/search/admin') %}active{% endif %}"
+         href="{{ url_for('search_admin') }}">Search</a>
+
+      <a class="nav-link {% if path.startswith('/calculator') %}active{% endif %}"
+         href="{{ url_for('calculator_page') }}">Calculator</a>
+
+      <div class="divider"></div>
+
+      <a class="nav-link {% if path.startswith('/profile') %}active{% endif %}"
+         href="{{ url_for('profile') }}">Profile</a>
+
+      <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
+
+    {% else %}
+      <a class="nav-link {% if path.startswith('/index') %}active{% endif %}"
+         href="{{ url_for('index') }}">Dashboard</a>
+
+      <a class="nav-link {% if path.startswith('/search/worker') %}active{% endif %}"
+         href="{{ url_for('search_worker') }}">Search</a>
+
+      <a class="nav-link {% if path.startswith('/calculator') %}active{% endif %}"
+         href="{{ url_for('calculator_page') }}">Calculator</a>
+
+      <div class="divider"></div>
+
+      <a class="nav-link {% if path.startswith('/profile') %}active{% endif %}"
+         href="{{ url_for('profile') }}">Profile</a>
+
+      <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
+    {% endif %}
+  </aside>
+
+  <!-- Main content -->
+  <main>
+    <div class="card">
+      <h2>{% if session.get('role') == 'admin' %}Admin Home{% else %}Worker Home{% endif %}</h2>
+      <p class="muted">
+        {% if session.get('role') == 'admin' %}
+          Inventory overview (Mongo).
+        {% else %}
+          Read-only view of products (Mongo).
+        {% endif %}
+      </p>
+
+      {% include "parts/product_table.html" %}
+    </div>
+  </main>
+
 </div>
+
 {% endblock %}

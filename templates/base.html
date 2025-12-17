@@ -116,7 +116,7 @@
       left:calc(100% + 8px); right:auto; width:220px;
     }
 
-    /* 🎯 Avatar-only footer button when the sidebar is collapsed */
+    /* Avatar-only footer button when the sidebar is collapsed */
     .sidebar:not(.expanded) .sb-userbtn{
       padding:8px;
       justify-content:center;
@@ -203,6 +203,19 @@
           <span class="sb-label">Search</span>
         </a>
 
+        <!-- ✅ Calculator (admin) -->
+        <a class="sb-item {% if request.endpoint=='calculator_page' %}active{% endif %}"
+           href="{{ url_for('calculator_page') }}" data-tip="Calculator">
+          <span class="sb-ico">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="6" y="2" width="12" height="20" rx="2"/>
+              <path d="M8 6h8"/><path d="M8 10h2"/><path d="M12 10h2"/><path d="M16 10h0"/>
+              <path d="M8 14h2"/><path d="M12 14h2"/><path d="M8 18h8"/>
+            </svg>
+          </span>
+          <span class="sb-label">Calculator</span>
+        </a>
+
         <!-- New account (admin only) -->
         <a class="sb-item {% if request.endpoint=='create_user' %}active{% endif %}"
            href="{{ url_for('create_user') }}" data-tip="New account">
@@ -214,6 +227,7 @@
           </span>
           <span class="sb-label">New account</span>
         </a>
+
       {% elif session.get('role') == 'worker' %}
         <a class="sb-item {% if request.endpoint=='index' %}active{% endif %}"
            href="{{ url_for('index') }}" data-tip="Home">
@@ -234,8 +248,20 @@
           </span>
           <span class="sb-label">Search</span>
         </a>
+
+        <!-- ✅ Calculator (worker) -->
+        <a class="sb-item {% if request.endpoint=='calculator_page' %}active{% endif %}"
+           href="{{ url_for('calculator_page') }}" data-tip="Calculator">
+          <span class="sb-ico">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="6" y="2" width="12" height="20" rx="2"/>
+              <path d="M8 6h8"/><path d="M8 10h2"/><path d="M12 10h2"/>
+              <path d="M8 14h2"/><path d="M12 14h2"/><path d="M8 18h8"/>
+            </svg>
+          </span>
+          <span class="sb-label">Calculator</span>
+        </a>
       {% endif %}
-      <!-- No always-visible Profile link; use the user popover instead -->
     </div>
 
     <!-- Footer with user popover -->
@@ -273,7 +299,7 @@
     </div>
   </aside>
 
-  <!-- Mobile topbar (shows only on small screens) -->
+  <!-- Mobile topbar -->
   <header class="topbar">
     <button id="burger" class="burger" aria-label="Open menu">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -352,7 +378,7 @@
         }
       });
 
-      // confirmation for links with data-confirm (general)
+      // confirmation for links with data-confirm
       document.addEventListener('click', (e) => {
         const a = e.target.closest('a[data-confirm]');
         if (!a) return;

@@ -1,0 +1,182 @@
+{% extends "index.html" %}
+{% block title %}Calculator{% endblock %}
+
+{% block content %}
+<style>
+  .card{
+    background:#fff;
+    border:1px solid #e5e7eb;
+    border-radius:14px;
+    padding:14px;
+    box-shadow:0 1px 2px rgba(0,0,0,.04);
+    margin:12px 0;
+  }
+  .row{ display:flex; gap:10px; align-items:end; flex-wrap:wrap; }
+  label{ font-weight:600; color:#111827; display:block; margin-bottom:6px; }
+  input, select{
+    border:1px solid #e5e7eb;
+    border-radius:10px;
+    padding:10px 12px;
+    outline:none;
+    min-width:180px;
+  }
+  .btn{
+    background:#111827 !important;
+    color:#fff !important;
+    border:1px solid #e5e7eb !important;
+    border-radius:10px !important;
+    padding:8px 12px !important;
+    cursor:pointer !important;
+    text-decoration:none !important;
+    display:inline-flex !important;
+    align-items:center !important;
+    gap:6px !important;
+  }
+  .btn:hover{opacity:.92}
+  .muted{ color:#6b7280; }
+  .big{ font-size:22px; font-weight:800; }
+  .warn{
+    background:#fff7ed;
+    border:1px solid #fed7aa;
+    color:#9a3412;
+    padding:10px 12px;
+    border-radius:12px;
+    margin-top:10px;
+    display:none;
+  }
+</style>
+
+<h1>Calculator</h1>
+
+<div class="card">
+  <form method="get" class="row">
+    <div>
+      <label for="uid">UID / MSSID</label>
+      <input id="uid" name="uid" placeholder="Enter UID or MSSID..." value="{{ uid or '' }}">
+      <div class="muted" style="margin-top:6px;">Tip: paste the item UID, then click Load</div>
+    </div>
+    <button class="btn" type="submit">Load</button>
+  </form>
+</div>
+
+{% if prices %}
+  <div class="card">
+    <div style="font-size:18px;font-weight:800;">{{ prices.name or "Item" }}</div>
+    <div class="muted">Part-ID: <strong>{{ prices.uid }}</strong></div>
+  </div>
+
+  <div class="card">
+    <h2 style="margin:0 0 10px;">Total Calculator</h2>
+
+    <div class="row" style="margin-bottom:10px;">
+      <div>
+        <label for="calcType">Type</label>
+        <select id="calcType">
+          <option value="P">Purchasing (P)</option>
+          <option value="S">Selling (S)</option>
+        </select>
+      </div>
+
+      <div>
+        <label for="calcTier">Tier</label>
+        <select id="calcTier"></select>
+      </div>
+
+      <div>
+        <label for="calcQty">Quantity</label>
+        <input id="calcQty" type="number" min="0" step="1" value="0" />
+      </div>
+
+      <div style="min-width:220px;">
+        <label>Unit Price</label>
+        <div id="unitPrice" class="big">—</div>
+      </div>
+
+      <div style="min-width:220px;">
+        <label>Total</label>
+        <div id="totalPrice" class="big">—</div>
+      </div>
+    </div>
+
+    <div id="calcWarn" class="warn">
+      This tier has no price set. Pick another tier.
+    </div>
+
+    <div style="margin-top:12px;">
+      <a class="btn" href="{{ url_for('view_pricing', uid=prices.uid) }}">View Pricing Table</a>
+    </div>
+  </div>
+
+  {% if prices %}
+<script>
+  const PRICES = {{ prices|tojson }};
+  const tierOrder = ["S12","S100","S500","1K","3K","5K","10K"];
+  // calculator JS here
+</script>
+{% endif %}
+
+    const elType = document.getElementById("calcType");
+    const elTier = document.getElementById("calcTier");
+    const elQty  = document.getElementById("calcQty");
+    const elUnit = document.getElementById("unitPrice");
+    const elTotal= document.getElementById("totalPrice");
+    const elWarn = document.getElementById("calcWarn");
+
+    function fmtMoney(x){
+      if (x === null || x === undefined || Number.isNaN(x)) return "—";
+      return Number(x).toFixed(2);
+    }
+
+    function getBucket(){
+      return (elType.value === "S") ? (PRICES.S || {}) : (PRICES.P || {});
+    }
+
+    function rebuildTierOptions(){
+      const bucket = getBucket();
+      elTier.innerHTML = "";
+      tierOrder.forEach(k => {
+        const opt = document.createElement("option");
+        opt.value = k;
+        const val = bucket[k];
+        opt.textContent = (val !== null && val !== undefined) ? `${k} (${fmtMoney(val)})` : `${k} (—)`;
+        elTier.appendChild(opt);
+      });
+    }
+
+    function recalc(){
+      const bucket = getBucket();
+      const tier = elTier.value;
+      const unit = bucket[tier];
+
+      const qty = Math.max(0, parseInt(elQty.value || "0", 10));
+      elQty.value = qty;
+
+      if (unit === null || unit === undefined || unit === "" || Number.isNaN(Number(unit))){
+        elUnit.textContent = "—";
+        elTotal.textContent = "—";
+        elWarn.style.display = "block";
+        return;
+      }
+
+      elWarn.style.display = "none";
+      const unitNum = Number(unit);
+      const total = unitNum * qty;
+
+      elUnit.textContent = fmtMoney(unitNum);
+      elTotal.textContent = fmtMoney(total);
+    }
+
+    rebuildTierOptions();
+    recalc();
+
+    elType.addEventListener("change", () => { rebuildTierOptions(); recalc(); });
+    elTier.addEventListener("change", recalc);
+    elQty.addEventListener("input", recalc);
+  </script>
+{% else %}
+  <div class="card">
+    <div class="muted">Enter a UID/MSSID above and click <strong>Load</strong> to calculate totals.</div>
+  </div>
+{% endif %}
+
+{% endblock %}
