@@ -703,6 +703,47 @@ def _render_search(role):
 
     locations_list = _all_locations_list()
 
+    # sort key from querystring or form
+    sort_by = (request.values.get("sort") or "name_asc").strip()
+
+    def _safe_int(v, default=0):
+        try:
+            if v is None:
+                return default
+            if isinstance(v, (int, float)):
+                return int(v)
+            s = str(v).strip()
+            if s == "":
+                return default
+            return int(float(s))
+        except Exception:
+            return default
+
+    def _sort_rows(rows, sort_by):
+        # stable + safe sort helpers
+        if sort_by == "name_asc":
+            return sorted(rows, key=lambda p: (p.get("name") or "").lower())
+        if sort_by == "name_desc":
+            return sorted(rows, key=lambda p: (p.get("name") or "").lower(), reverse=True)
+
+        if sort_by == "uid_asc":
+            return sorted(rows, key=lambda p: (p.get("uid") or "").lower())
+        if sort_by == "uid_desc":
+            return sorted(rows, key=lambda p: (p.get("uid") or "").lower(), reverse=True)
+
+        if sort_by == "volume_asc":
+            return sorted(rows, key=lambda p: (_safe_int(p.get("volume_ml"), 10**9), (p.get("name") or "").lower()))
+        if sort_by == "volume_desc":
+            return sorted(rows, key=lambda p: (_safe_int(p.get("volume_ml"), -1), (p.get("name") or "").lower()), reverse=True)
+
+        if sort_by == "stock_asc":
+            return sorted(rows, key=lambda p: (_safe_int(p.get("stock"), 10**9), (p.get("name") or "").lower()))
+        if sort_by == "stock_desc":
+            return sorted(rows, key=lambda p: (_safe_int(p.get("stock"), -1), (p.get("name") or "").lower()), reverse=True)
+
+        # fallback
+        return sorted(rows, key=lambda p: (p.get("name") or "").lower())
+
     if request.method == "POST" or q_get:
         q = (request.form.get("search_uid") or q_get or "").strip().lower()
         selected_cat = (request.values.get("filter_category") or "All").strip()
@@ -711,6 +752,7 @@ def _render_search(role):
 
         rows = _all_products()
 
+        # keyword search (multi-keyword AND)
         if q:
             keys = q.split()
             rows = [
@@ -722,6 +764,7 @@ def _render_search(role):
                 ]).lower() for k in keys)
             ]
 
+        # filters
         if selected_cat != "All":
             rows = [p for p in rows if (p.get("category") or "Uncategorized") == selected_cat]
 
@@ -734,6 +777,9 @@ def _render_search(role):
 
         if selected_location:
             rows = [p for p in rows if _matches_location(p, selected_location)]
+
+        # apply sorting here
+        rows = _sort_rows(rows, sort_by)
 
         result = rows
         if not result:
@@ -751,6 +797,9 @@ def _render_search(role):
         categories=["All"] + cats,
         volumes=vols,
         locations_list=locations_list,
+
+        #  pass current sort selection back to template
+        sort_by=sort_by,
     )
 
 @app.route("/search/admin", methods=["GET", "POST"])

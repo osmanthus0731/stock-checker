@@ -18,6 +18,15 @@
   }
   .btn:hover{opacity:.92}
 
+  /* keep selects readable even if .btn is used elsewhere */
+  select, input{
+    border:1px solid #e5e7eb;
+    border-radius:10px;
+    padding:8px 10px;
+    background:#fff;
+    color:#111;
+  }
+
   .card{
     background:#fff;
     border:1px solid #e5e7eb;
@@ -51,6 +60,19 @@
     margin-bottom:4px
   }
   .muted{color:#6b7280}
+
+  .row{
+    display:flex;
+    align-items:center;
+    flex-wrap:wrap;
+    gap:10px;
+  }
+
+  .label{
+    font-size:12px;
+    color:#6b7280;
+    margin-right:2px;
+  }
 </style>
 
 <h1>Search</h1>
@@ -59,15 +81,17 @@
 {% set selected_category = request.values.get('filter_category', 'All') %}
 {% set selected_volume   = request.values.get('volume', '') %}
 {% set selected_location = request.values.get('location', '') %}
+{% set selected_sort     = request.values.get('sort', sort_by|default('name_asc')) %}
 {% set selected_query    = request.values.get('search_uid', request.args.get('q','')) %}
 
-<form method="post" class="row" style="margin:10px 0 16px; gap:10px;">
+<form method="post" class="row" style="margin:10px 0 16px;">
+
   <input name="search_uid"
          placeholder="Search by UID/Name/MSSID…"
          style="min-width:260px"
          value="{{ selected_query }}"/>
 
-  <label>Category</label>
+  <span class="label">Category</span>
   <select name="filter_category">
     <option value="All" {% if selected_category == 'All' %}selected{% endif %}>All</option>
     {% for c in categories %}
@@ -78,7 +102,7 @@
   </select>
 
   <!-- 🔒 VOLUME UNCHANGED -->
-  <label>Volume</label>
+  <span class="label">Volume</span>
   <select name="volume">
     <option value="" {% if selected_volume == '' %}selected{% endif %}>Any</option>
     {% for v in volumes %}
@@ -87,12 +111,28 @@
   </select>
 
   <!-- ✅ LOCATION: Any + all options -->
-  <label>Location</label>
+  <span class="label">Location</span>
   <select name="location">
     <option value="" {% if selected_location == '' %}selected{% endif %}>Any</option>
     {% for loc in locations_list %}
       <option value="{{ loc }}" {% if selected_location == loc %}selected{% endif %}>{{ loc }}</option>
     {% endfor %}
+  </select>
+
+  <!-- ✅ SORT -->
+  <span class="label">Sort</span>
+  <select name="sort">
+    <option value="name_asc"  {% if selected_sort == 'name_asc' %}selected{% endif %}>Name (A–Z)</option>
+    <option value="name_desc" {% if selected_sort == 'name_desc' %}selected{% endif %}>Name (Z–A)</option>
+
+    <option value="uid_asc"   {% if selected_sort == 'uid_asc' %}selected{% endif %}>UID (A–Z)</option>
+    <option value="uid_desc"  {% if selected_sort == 'uid_desc' %}selected{% endif %}>UID (Z–A)</option>
+
+    <option value="volume_asc"  {% if selected_sort == 'volume_asc' %}selected{% endif %}>Volume (Low → High)</option>
+    <option value="volume_desc" {% if selected_sort == 'volume_desc' %}selected{% endif %}>Volume (High → Low)</option>
+
+    <option value="stock_asc"  {% if selected_sort == 'stock_asc' %}selected{% endif %}>Stock (Low → High)</option>
+    <option value="stock_desc" {% if selected_sort == 'stock_desc' %}selected{% endif %}>Stock (High → Low)</option>
   </select>
 
   <button class="btn" type="submit">Search</button>
@@ -169,8 +209,13 @@
   function toggleQR(uid){
     const wrap = document.getElementById('qrwrap-' + uid);
     if(!wrap) return;
+
     const visible = wrap.style.display === 'block';
-    if(visible){ wrap.style.display = 'none'; return; }
+    if(visible){
+      wrap.style.display = 'none';
+      return;
+    }
+
     if(!wrap.querySelector('img')){
       const img = document.createElement('img');
       img.width = 96;
@@ -182,6 +227,7 @@
       img.src = "{{ url_for('qr', uid='__UID__') }}".replace('__UID__', uid);
       wrap.appendChild(img);
     }
+
     wrap.style.display = 'block';
   }
 </script>
