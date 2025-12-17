@@ -55,11 +55,11 @@
 
 <h1>Search</h1>
 
-{# keep selected values after submit #}
-{% set selected_category = request.form.get('filter_category', 'All') %}
-{% set selected_volume   = request.form.get('volume', '') %}
-{% set selected_location = request.form.get('location', '') %}
-{% set selected_query    = request.form.get('search_uid', '') %}
+{# ✅ keep selected values after submit (works for POST + GET) #}
+{% set selected_category = request.values.get('filter_category', 'All') %}
+{% set selected_volume   = request.values.get('volume', '') %}
+{% set selected_location = request.values.get('location', '') %}
+{% set selected_query    = request.values.get('search_uid', request.args.get('q','')) %}
 
 <form method="post" class="row" style="margin:10px 0 16px; gap:10px;">
   <input name="search_uid"

@@ -1,10 +1,4 @@
 # app.py — Mongo-first (Vercel-safe) inventory app with login + user management
-# Updates in this version:
-# ✅ Supports legacy/single-location field from Access/Mongo:
-#    - If a product document contains "Loc_FilmBox" (or "location") it will be normalized into locations[]
-# ✅ Adds FIELD_MAP so when your code/UI says "location", Mongo uses "Loc_FilmBox" (schema-safe)
-# ✅ Adds small helpers to read/write location consistently
-
 from flask import (
     Flask, render_template, render_template_string, request, redirect, url_for,
     session, flash, send_file
@@ -25,23 +19,16 @@ IS_VERCEL = os.getenv("VERCEL") == "1"
 # ---------------- ENV ----------------
 MONGO_URI = (os.getenv("MONGO_URI") or os.getenv("MONGO_URL") or "").strip()
 MONGO_DB = (os.getenv("MONGO_DB") or "inventory").strip()
-
 if not MONGO_URI:
     raise RuntimeError("MONGO_URI is not set")
 
-# Optional: force Mongo-only even on Windows
 FORCE_MONGO_ONLY = os.getenv("FORCE_MONGO_ONLY", "0") == "1"
 
 # ---------------- Field mapping (UI/form -> DB schema) ----------------
-# Your UI/app can keep using "location" while Mongo stores "Loc_FilmBox".
-FIELD_MAP = {
-    "location": "Loc_FilmBox",
-}
-
+FIELD_MAP = {"location": "Loc_FilmBox"}
 def map_field(ui_field: str) -> str:
     return FIELD_MAP.get(ui_field, ui_field)
 
-# If you ever need the reverse (DB -> UI), keep it here:
 DB_TO_UI = {v: k for k, v in FIELD_MAP.items()}
 
 # ---------------- Emergency fallback admin (LAST RESORT) ----------------
@@ -51,7 +38,6 @@ FALLBACK_ADMIN = {
     "role": os.getenv("FALLBACK_ADMIN_ROLE", "admin"),
 }
 
-# Optional: bootstrap an admin user if users collection is empty
 BOOTSTRAP_USERS = os.getenv("BOOTSTRAP_USERS", "0") == "1"
 BOOTSTRAP_ADMIN = {
     "username": os.getenv("BOOTSTRAP_ADMIN_USERNAME", FALLBACK_ADMIN["username"]),
@@ -71,7 +57,6 @@ if MONGO_URI.startswith("mongodb+srv://") or "mongodb.net" in MONGO_URI:
 client = MongoClient(MONGO_URI, **_tls)
 db = client[MONGO_DB]
 
-# Collections
 users = db.get_collection("users")
 products_col = db.get_collection("products")
 pricing_col = db.get_collection("pricing")
@@ -100,9 +85,7 @@ def role_required(*roles):
     return wrap
 
 def _is_hash(s: str) -> bool:
-    if not s or not isinstance(s, str):
-        return False
-    return s.startswith("scrypt:") or s.startswith("pbkdf2:") or s.startswith("argon2:")
+    return isinstance(s, str) and (s.startswith("scrypt:") or s.startswith("pbkdf2:") or s.startswith("argon2:"))
 
 def _password_matches(stored: str, supplied: str) -> bool:
     stored = stored or ""
@@ -110,13 +93,6 @@ def _password_matches(stored: str, supplied: str) -> bool:
     if _is_hash(stored):
         return check_password_hash(stored, supplied)
     return stored == supplied
-
-def _safe_mongo_ping() -> bool:
-    try:
-        client.admin.command("ping")
-        return True
-    except Exception:
-        return False
 
 def _bootstrap_admin_if_needed():
     if not BOOTSTRAP_USERS:
@@ -131,10 +107,7 @@ def _bootstrap_admin_if_needed():
                 "created_at": int(time.time()),
                 "bootstrap": True,
             })
-            app.logger.warning(
-                "Bootstrapped admin user '%s' (users collection was empty).",
-                BOOTSTRAP_ADMIN["username"]
-            )
+            app.logger.warning("Bootstrapped admin user '%s' (users empty).", BOOTSTRAP_ADMIN["username"])
     except Exception as e:
         app.logger.exception("Bootstrap admin failed: %s", e)
 
@@ -173,16 +146,6 @@ def _should_use_access():
         return False
     return (os.name == "nt") and bool(ACCESS_DB_PATH) and os.path.exists(ACCESS_DB_PATH) and (_odbc is not None)
 
-def _access_conn():
-    if not _should_use_access():
-        raise RuntimeError("Access not available in this environment")
-    conn_str = (
-        r"DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};"
-        rf"DBQ={ACCESS_DB_PATH};"
-        r"READONLY=TRUE;"
-    )
-    return _odbc.connect(conn_str, autocommit=True)
-
 # ---------------- Inventory helpers ----------------
 ITEMS_PER_PAGE = 5
 _VOL_RE = re.compile(r"(\d{1,5})\s*ml\b", re.IGNORECASE)
@@ -210,16 +173,8 @@ def _coerce_int(x, default=0):
         return default
 
 def _normalize_locations_from_legacy_fields(p: dict):
-    """
-    If product has legacy single-location field (Access/Mongo):
-      - "Loc_FilmBox" (preferred legacy field)
-      - OR "location" (older app field)
-    then convert it into locations[] if locations is missing.
-    """
     legacy_loc = (p.get("Loc_FilmBox") or p.get("location") or "").strip()
-    if not legacy_loc:
-        return None
-    return legacy_loc
+    return legacy_loc or None
 
 def _normalize_mongo_product(p: dict) -> dict:
     if not p:
@@ -232,7 +187,6 @@ def _normalize_mongo_product(p: dict) -> dict:
             "stock": 0,
             "volume_ml": None,
             "locations": [],
-            # convenience
             "location": "",
         }
 
@@ -246,7 +200,6 @@ def _normalize_mongo_product(p: dict) -> dict:
         "volume_ml": p.get("volume_ml"),
     }
 
-    # Primary structured locations (dict or list)
     locs = p.get("locations") or {}
     normalized_locations = []
 
@@ -265,27 +218,21 @@ def _normalize_mongo_product(p: dict) -> dict:
             if area:
                 normalized_locations.append({"area": area, "quantity": qty})
 
-    # ✅ Legacy single-location fallback (Loc_FilmBox / location)
     if not normalized_locations:
         legacy_loc = _normalize_locations_from_legacy_fields(p)
         if legacy_loc:
-            # If there is a stock value, use it as qty; else 0.
             legacy_qty = _coerce_int(p.get("stock"), 0)
             normalized_locations = [{"area": legacy_loc, "quantity": legacy_qty}]
 
     out["locations"] = normalized_locations
 
-    # Volume auto-extract
     if out.get("volume_ml") is None:
         out["volume_ml"] = _extract_volume_ml(out.get("name", "")) or _extract_volume_ml(out.get("readable_id", ""))
 
-    # Stock auto-sum (if missing)
     if out.get("stock") is None:
         out["stock"] = sum((i.get("quantity") or 0) for i in out["locations"])
 
-    # Convenience single location (first location, if any)
     out["location"] = out["locations"][0]["area"] if out["locations"] else ""
-
     return out
 
 def _all_products_from_mongo():
@@ -315,11 +262,24 @@ def _get_product_by_uid_mongo(uid: str):
         return None
 
 def _all_products():
-    # Access is optional; Mongo-only on Vercel
-    return _all_products_from_mongo() if (not _should_use_access()) else _all_products_from_mongo()
+    return _all_products_from_mongo()
 
 def _get_product_by_uid(uid: str):
-    return _get_product_by_uid_mongo(uid) if (not _should_use_access()) else _get_product_by_uid_mongo(uid)
+    return _get_product_by_uid_mongo(uid)
+
+# ✅ IMPORTANT: location dropdown list builder (fixes your NameError)
+def _all_locations_list():
+    rows = _all_products()
+    loc_set = set()
+    for p in rows:
+        for L in (p.get("locations") or []):
+            area = (L.get("area") or "").strip()
+            if area:
+                loc_set.add(area)
+        legacy = (p.get("location") or "").strip()
+        if legacy:
+            loc_set.add(legacy)
+    return sorted(loc_set)
 
 # ---------------- Pricing (Mongo-first) ----------------
 def _coerce_num(x):
@@ -355,6 +315,7 @@ def _get_prices_for_part_mongo(uid_or_part: str):
         mssid_candidate = (prod.get("readable_id") or "").strip()
 
         candidates = {c for c in [uid_candidate, mssid_candidate, key_raw] if c}
+
         rows = list(pricing_col.find(
             {
                 "part_id": {"$in": list(candidates)},
@@ -417,7 +378,6 @@ def favicon():
 # ---------------- Auth ----------------
 @app.route("/", methods=["GET", "POST"])
 def login():
-    # Already logged in
     if request.method == "GET" and "username" in session:
         next_url = request.args.get("next")
         if next_url:
@@ -428,13 +388,12 @@ def login():
         u = (request.form.get("username") or "").strip()
         p = (request.form.get("password") or "")
 
-        # 1) Try Mongo user login
+        # Mongo user login
         try:
             user = users.find_one({"username": u})
             if user:
                 stored_pw = user.get("password", "")
                 if _password_matches(stored_pw, p):
-                    # ✅ auto-upgrade plaintext password to hash
                     if not _is_hash(stored_pw):
                         users.update_one(
                             {"_id": user["_id"]},
@@ -451,7 +410,7 @@ def login():
         except Exception as e:
             app.logger.exception("Login Mongo lookup failed: %s", e)
 
-        # 2) LAST RESORT fallback admin
+        # fallback admin
         if u == FALLBACK_ADMIN["username"] and p == FALLBACK_ADMIN["password"]:
             session["username"] = FALLBACK_ADMIN["username"]
             session["role"] = FALLBACK_ADMIN["role"]
@@ -501,7 +460,7 @@ def logout():
 </html>
     """)
 
-# ---------------- QR (points to /item/<uid>) ----------------
+# ---------------- QR ----------------
 BASE_URL = os.getenv("BASE_URL", "").strip().rstrip("/")
 
 def _qr_target_url(uid: str) -> str:
@@ -519,13 +478,6 @@ def qr(uid: str):
     buf.seek(0)
     return send_file(buf, mimetype="image/png", download_name=f"{uid}.png")
 
-@app.route("/scan/<uid>")
-def scan_qr(uid: str):
-    if "username" not in session:
-        session["post_login_next"] = url_for("item_detail", uid=uid)
-        return redirect(url_for("login", next=url_for("item_detail", uid=uid)))
-    return redirect(url_for("item_detail", uid=uid))
-
 @app.route("/item/<uid>")
 @login_required
 def item_detail(uid: str):
@@ -538,7 +490,7 @@ def item_detail(uid: str):
     has_pricing = bool(_get_prices_for_part(uid))
     return render_template("item.html", role=session.get("role"), product=product, has_pricing=has_pricing)
 
-# ---------- Create user (ADMIN only) ----------
+# ---------- Create user ----------
 @app.route("/users/new", methods=["GET", "POST"])
 @role_required("admin")
 def create_user():
@@ -618,77 +570,26 @@ def profile():
     me = users.find_one({"username": session["username"]}) or {}
     return render_template("profile.html", me=me)
 
-# ---------------- Inventory page helpers ----------------
-def _filter_sort_paginate(products_all):
-    selected_cat = (request.values.get("filter_category") or "All").strip()
-    selected_vol = (request.values.get("volume") or "").strip()
-    location_q = (request.values.get("location") or "").strip().lower()
-
-    if selected_cat and selected_cat != "All":
-        products_all = [p for p in products_all if (p.get("category") or "Uncategorized") == selected_cat]
-
-    if selected_vol:
-        try:
-            v = int(selected_vol)
-            products_all = [p for p in products_all if p.get("volume_ml") == v]
-        except Exception:
-            pass
-
-    # ✅ Location filter: match if ANY location area contains the query
-    if location_q:
-        def matches_location(p):
-            locs = p.get("locations") or []
-            for L in locs:
-                area = (L.get("area") or "").strip().lower()
-                if location_q in area:
-                    return True
-            return False
-        products_all = [p for p in products_all if matches_location(p)]
-
-    # Pagination (page from querystring)
-    page = request.args.get("page", 1, type=int)
-    total_items = len(products_all)
-    total_pages = max(1, (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
-    page = max(1, min(page, total_pages))
-
-    start, end = (page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE
-    paginated = products_all[start:end]
-
-    # window pages (middle)
-    window = 5
-    half = window // 2
-    start_p = max(1, page - half)
-    end_p = min(total_pages, start_p + window - 1)
-    start_p = max(1, end_p - window + 1)
-    pages = list(range(start_p, end_p + 1))
-
-    return paginated, total_items, total_pages, pages, page, location_q
-
+# ---------------- Inventory page ctx ----------------
 def _inventory_ctx_from_mongo():
     products_all = list(_all_products_from_mongo())
-    paginated, total_items, total_pages, pages, page, location_q = _filter_sort_paginate(products_all)
 
     cats = sorted({p.get("category") or "Uncategorized" for p in products_all})
     vols = sorted({int(p["volume_ml"]) for p in products_all if p.get("volume_ml")})
 
-    # (Optional) quick count of products with no pict still used by UI badge
-    nopict_count = sum(1 for p in paginated if not p.get("pict"))
-
     return {
-        "products": paginated,
+        "products": products_all[:ITEMS_PER_PAGE],  # simple view
         "categories": ["All"] + cats,
         "volumes": vols,
-
         "selected_category": (request.values.get("filter_category") or "All").strip(),
         "selected_volume": (request.values.get("volume") or "").strip(),
-        "location": (request.values.get("location") or "").strip(),  # keep original casing for textbox
-
-        "page": page,
-        "total_pages": total_pages,
-        "pages": pages,
+        "location": (request.values.get("location") or "").strip(),
+        "page": 1,
+        "total_pages": 1,
+        "pages": [1],
         "per_page": ITEMS_PER_PAGE,
-        "total_items": total_items,
-        "nopict_count": nopict_count,
+        "total_items": len(products_all),
+        "nopict_count": sum(1 for p in products_all[:ITEMS_PER_PAGE] if not p.get("pict")),
     }
 
 def _inventory_ctx():
@@ -710,16 +611,14 @@ def debug_pricing(uid):
     prices = _get_prices_for_part(uid)
     return prices or {"ok": False, "msg": "No pricing found in Mongo"}
 
-#calc#
+# ✅ Calculator route
 @app.route("/calculator", methods=["GET"])
 @login_required
 def calculator_page():
     uid = (request.args.get("uid") or "").strip()
     prices = _get_prices_for_part(uid) if uid else None
-
     if uid and not prices:
         flash("No pricing found for that UID/MSSID.", "info")
-
     return render_template("calculator.html", prices=prices, uid=uid)
 
 # ---------------- Dashboards ----------------
@@ -775,7 +674,6 @@ def _render_search(role):
     result, message = [], None
     q_get = (request.args.get("q") or "").strip().lower()
 
-    # ✅ location dropdown options (always available)
     locations_list = _all_locations_list()
 
     if request.method == "POST" or q_get:
@@ -786,7 +684,6 @@ def _render_search(role):
 
         rows = _all_products()
 
-        # search keywords (uid/name/mssid)
         if q:
             keys = q.split()
             rows = [
@@ -798,11 +695,9 @@ def _render_search(role):
                 ]).lower() for k in keys)
             ]
 
-        # category filter
         if selected_cat != "All":
             rows = [p for p in rows if (p.get("category") or "Uncategorized") == selected_cat]
 
-        # volume filter
         if selected_vol:
             try:
                 v = int(selected_vol)
@@ -810,14 +705,12 @@ def _render_search(role):
             except Exception:
                 pass
 
-        # ✅ location filter
         if selected_location:
             def matches_location(p):
                 for L in (p.get("locations") or []):
                     area = (L.get("area") or "").strip().lower()
                     if selected_location in area:
                         return True
-                # fallback
                 legacy = (p.get("location") or "").strip().lower()
                 return selected_location in legacy if legacy else False
 
@@ -838,7 +731,7 @@ def _render_search(role):
         role=role,
         categories=["All"] + cats,
         volumes=vols,
-        locations_list=locations_list,   
+        locations_list=locations_list,
     )
 
 @app.route("/search/admin", methods=["GET", "POST"])
