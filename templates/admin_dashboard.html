@@ -3,6 +3,7 @@
 
 {% block content %}
 <style>
+  /* --- existing styles --- */
   .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0 16px}
   .toolbar label{font-weight:600;color:#334155}
   .toolbar select,.toolbar input[type="text"], .toolbar input[type="number"]{
@@ -39,144 +40,206 @@
   .jump{display:inline-flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap}
   .jump input{min-width:110px}
   .tiny{font-size:.85rem}
+
+  /* --- NEW: two-column layout for dashboard + right sidebar --- */
+  .dash-grid{
+    display:grid;
+    grid-template-columns: 1fr 320px;
+    gap:14px;
+    align-items:start;
+  }
+  @media (max-width: 1100px){
+    .dash-grid{grid-template-columns: 1fr;}
+  }
+
+  /* --- NEW: People widget styles --- */
+  .people-card{position:sticky; top:14px;}
+  @media (max-width: 1100px){
+    .people-card{position:relative; top:auto;}
+  }
+  .people-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+  .people-title{font-weight:800;color:#111827}
+  .people-meta{font-size:12px;color:#6b7280}
+  .people-section{margin-top:10px}
+  .people-section h4{margin:0 0 8px;font-size:.95rem;color:#111827}
+  .person{
+    display:flex;justify-content:space-between;gap:10px;align-items:center;
+    padding:7px 0;border-bottom:1px solid #f1f5f9;
+  }
+  .person:last-child{border-bottom:none}
+  .person-left{display:flex;gap:8px;align-items:center;min-width:0}
+  .dot{width:10px;height:10px;border-radius:999px;flex:0 0 10px}
+  .dot.on{background:#22c55e}
+  .dot.off{background:#cbd5e1}
+  .person-name{font-weight:800;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .person-role{color:#64748b;font-size:12px}
+  .person-right{color:#6b7280;font-size:12px;white-space:nowrap}
+  .mini{font-size:12px;color:#6b7280}
 </style>
 
-<h1 style="margin:0 0 8px">Admin Dashboard</h1>
-<p class="muted" style="margin:0 0 14px;">Filter, view, and jump to pricing.</p>
+<div class="dash-grid">
+  <!-- ================= LEFT: existing dashboard ================= -->
+  <div>
+    <h1 style="margin:0 0 8px">Admin Dashboard</h1>
+    <p class="muted" style="margin:0 0 14px;">Filter, view, and jump to pricing.</p>
 
-<form method="get" class="toolbar">
-  <label>Category</label>
-  <select name="filter_category">
-    {% for c in categories %}
-      <option value="{{ c }}" {{ 'selected' if selected_category == c }}>{{ c }}</option>
-    {% endfor %}
-  </select>
+    <form method="get" class="toolbar">
+      <label>Category</label>
+      <select name="filter_category">
+        {% for c in categories %}
+          <option value="{{ c }}" {{ 'selected' if selected_category == c }}>{{ c }}</option>
+        {% endfor %}
+      </select>
 
-  <label>Volume</label>
-  <select name="volume">
-    <option value="" {{ 'selected' if not selected_volume }}>Any</option>
-    {% for v in volumes %}
-      <option value="{{ v }}" {{ 'selected' if selected_volume == (v|string) }}>{{ v }} ml</option>
-    {% endfor %}
-  </select>
+      <label>Volume</label>
+      <select name="volume">
+        <option value="" {{ 'selected' if not selected_volume }}>Any</option>
+        {% for v in volumes %}
+          <option value="{{ v }}" {{ 'selected' if selected_volume == (v|string) }}>{{ v }} ml</option>
+        {% endfor %}
+      </select>
 
-  <label>Location</label>
-  <input type="text" name="location" placeholder="e.g. G8 / A1" value="{{ location or '' }}" />
+      <label>Location</label>
+      <input type="text" name="location" placeholder="e.g. G8 / A1" value="{{ location or '' }}" />
 
-  <span class="badge" title="Rows on this page with empty/blank pict">No Pict: {{ nopict_count }}</span>
+      <span class="badge" title="Rows on this page with empty/blank pict">No Pict: {{ nopict_count }}</span>
 
-  <button class="btn" type="submit">Apply</button>
-  <a class="btn" href="{{ url_for('admin_dashboard') }}" title="Clear all filters">Reset</a>
-</form>
+      <button class="btn" type="submit">Apply</button>
+      <a class="btn" href="{{ url_for('admin_dashboard') }}" title="Clear all filters">Reset</a>
+    </form>
 
-<div class="card">
-  <div class="table-wrap">
-    <table>
-      <thead>
-      <tr>
-        <th>Name</th>
-        <th style="width:160px;">ID</th>
-        <th style="width:110px;">Volume</th>
-        <th>Locations</th>
-        <th style="width:110px;">Stock</th>
-        <th style="width:140px;">QR</th>
-        <th style="width:120px;">Pricing</th>
-      </tr>
-      </thead>
+    <div class="card">
+      <div class="table-wrap">
+        <table>
+          <thead>
+          <tr>
+            <th>Name</th>
+            <th style="width:160px;">ID</th>
+            <th style="width:110px;">Volume</th>
+            <th>Locations</th>
+            <th style="width:110px;">Stock</th>
+            <th style="width:140px;">QR</th>
+            <th style="width:120px;">Pricing</th>
+          </tr>
+          </thead>
 
-      <tbody>
-      {% for p in products %}
-        <tr>
-          <td>{{ p.name }}</td>
-          <td>{{ p.readable_id }}</td>
-          <td>{{ p.volume_ml if p.volume_ml else '—' }}</td>
+          <tbody>
+          {% for p in products %}
+            <tr>
+              <td>{{ p.name }}</td>
+              <td>{{ p.readable_id }}</td>
+              <td>{{ p.volume_ml if p.volume_ml else '—' }}</td>
 
-          <td>
-            {% if p.locations and (p.locations|length > 0) %}
-              {% for L in p.locations %}
-                <span class="chip">{{ L.area }}: <strong>{{ L.quantity }}</strong></span>
-              {% endfor %}
-            {% else %}
-              <span class="muted">—</span>
+              <td>
+                {% if p.locations and (p.locations|length > 0) %}
+                  {% for L in p.locations %}
+                    <span class="chip">{{ L.area }}: <strong>{{ L.quantity }}</strong></span>
+                  {% endfor %}
+                {% else %}
+                  <span class="muted">—</span>
+                {% endif %}
+              </td>
+
+              <td>
+                {% if p.stock is not none %}
+                  <strong>{{ p.stock }}</strong>
+                {% else %}
+                  <span class="muted">—</span>
+                {% endif %}
+              </td>
+
+              <td>
+                <button class="btn" type="button" onclick="toggleQR('{{ p.uid }}')">Show QR</button>
+                <div id="qrwrap-{{ p.uid }}" style="display:none;"></div>
+              </td>
+
+              <td>
+                <a class="btn" href="{{ url_for('view_pricing', uid=p.uid) }}">View</a>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {% if total_pages > 1 %}
+      <div class="pagy">
+        <div class="pages-left">
+          <!-- first page -->
+          {% if page == 1 %}
+            <span class="btn active">1</span>
+          {% else %}
+            <a class="btn" href="{{ url_for('admin_dashboard', page=1, filter_category=selected_category, volume=selected_volume, location=location) }}">1</a>
+          {% endif %}
+
+          {% if pages and pages[0] > 2 %}
+            <span class="muted">…</span>
+          {% endif %}
+
+          <!-- window -->
+          {% for i in pages %}
+            {% if i != 1 and i != total_pages %}
+              {% if i == page %}
+                <span class="btn active">{{ i }}</span>
+              {% else %}
+                <a class="btn" href="{{ url_for('admin_dashboard', page=i, filter_category=selected_category, volume=selected_volume, location=location) }}">{{ i }}</a>
+              {% endif %}
             {% endif %}
-          </td>
+          {% endfor %}
 
-          <td>
-            {% if p.stock is not none %}
-              <strong>{{ p.stock }}</strong>
-            {% else %}
-              <span class="muted">—</span>
-            {% endif %}
-          </td>
+          {% if pages and pages[-1] < total_pages - 1 %}
+            <span class="muted">…</span>
+          {% endif %}
 
-          <td>
-            <button class="btn" type="button" onclick="toggleQR('{{ p.uid }}')">Show QR</button>
-            <div id="qrwrap-{{ p.uid }}" style="display:none;"></div>
-          </td>
+          <!-- last page -->
+          {% if page == total_pages %}
+            <span class="btn active">{{ total_pages }}</span>
+          {% else %}
+            <a class="btn" href="{{ url_for('admin_dashboard', page=total_pages, filter_category=selected_category, volume=selected_volume, location=location) }}">{{ total_pages }}</a>
+          {% endif %}
 
-          <td>
-            <a class="btn" href="{{ url_for('view_pricing', uid=p.uid) }}">View</a>
-          </td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
+          <span class="muted tiny">
+            ({{ ((page-1)*per_page + 1) }}–{{ [page*per_page, total_items]|min }} of {{ total_items }})
+          </span>
+        </div>
+
+        <!-- ✅ Instant "Go to page" -->
+        <div class="jump">
+          <span class="muted">Go to page</span>
+          <input id="pageJump"
+                 type="number"
+                 min="1"
+                 max="{{ total_pages }}"
+                 value="{{ page }}"
+                 inputmode="numeric" />
+        </div>
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- ================= RIGHT: People Online/Offline widget ================= -->
+  <div>
+    <div class="card people-card">
+      <div class="people-head">
+        <div class="people-title">People</div>
+        <div class="people-meta" id="presenceMeta">Loading…</div>
+      </div>
+
+      <div class="mini">Online = active recently (heartbeat)</div>
+
+      <div class="people-section">
+        <h4>Online</h4>
+        <div id="onlineList" class="mini">Loading…</div>
+      </div>
+
+      <div class="people-section">
+        <h4>Offline</h4>
+        <div id="offlineList" class="mini">Loading…</div>
+      </div>
+    </div>
   </div>
 </div>
-
-{% if total_pages > 1 %}
-  <div class="pagy">
-    <div class="pages-left">
-      <!-- first page -->
-      {% if page == 1 %}
-        <span class="btn active">1</span>
-      {% else %}
-        <a class="btn" href="{{ url_for('admin_dashboard', page=1, filter_category=selected_category, volume=selected_volume, location=location) }}">1</a>
-      {% endif %}
-
-      {% if pages and pages[0] > 2 %}
-        <span class="muted">…</span>
-      {% endif %}
-
-      <!-- window -->
-      {% for i in pages %}
-        {% if i != 1 and i != total_pages %}
-          {% if i == page %}
-            <span class="btn active">{{ i }}</span>
-          {% else %}
-            <a class="btn" href="{{ url_for('admin_dashboard', page=i, filter_category=selected_category, volume=selected_volume, location=location) }}">{{ i }}</a>
-          {% endif %}
-        {% endif %}
-      {% endfor %}
-
-      {% if pages and pages[-1] < total_pages - 1 %}
-        <span class="muted">…</span>
-      {% endif %}
-
-      <!-- last page -->
-      {% if page == total_pages %}
-        <span class="btn active">{{ total_pages }}</span>
-      {% else %}
-        <a class="btn" href="{{ url_for('admin_dashboard', page=total_pages, filter_category=selected_category, volume=selected_volume, location=location) }}">{{ total_pages }}</a>
-      {% endif %}
-
-      <span class="muted tiny">
-        ({{ ((page-1)*per_page + 1) }}–{{ [page*per_page, total_items]|min }} of {{ total_items }})
-      </span>
-    </div>
-
-    <!-- ✅ Instant "Go to page" -->
-    <div class="jump">
-      <span class="muted">Go to page</span>
-      <input id="pageJump"
-             type="number"
-             min="1"
-             max="{{ total_pages }}"
-             value="{{ page }}"
-             inputmode="numeric" />
-    </div>
-  </div>
-{% endif %}
 
 <script>
   function toggleQR(uid){
@@ -226,10 +289,69 @@
       }
     });
 
-    inp.addEventListener("blur", () => {
-      // blur jump feels "instant" without extra button
-      go();
-    });
+    inp.addEventListener("blur", () => { go(); });
+  })();
+
+  // ✅ People Online/Offline widget (requires /api/presence/status in app.py)
+  (function(){
+    const meta = document.getElementById("presenceMeta");
+    const onlineEl = document.getElementById("onlineList");
+    const offlineEl = document.getElementById("offlineList");
+
+    function esc(s){
+      return String(s ?? "")
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#39;");
+    }
+
+    function personRow(u, online){
+      const dotClass = online ? "dot on" : "dot off";
+      const right = online ? "now" : (u.seconds_ago == null ? "" : `${Number(u.seconds_ago)}s`);
+      return `
+        <div class="person">
+          <div class="person-left">
+            <span class="${dotClass}"></span>
+            <div style="min-width:0">
+              <div class="person-name">${esc(u.username)}</div>
+              <div class="person-role">${esc(u.role || "")}</div>
+            </div>
+          </div>
+          <div class="person-right">${esc(right)}</div>
+        </div>
+      `;
+    }
+
+    async function refresh(){
+      try{
+        const res = await fetch("/api/presence/status", {headers: {"Accept":"application/json"}});
+        const data = await res.json();
+        if(!data.ok) return;
+
+        const on = data.online || [];
+        const off = data.offline || [];
+
+        meta.textContent = `${on.length} online • window ${data.window}s`;
+
+        onlineEl.innerHTML = on.length
+          ? on.map(u => personRow(u, true)).join("")
+          : `<div class="mini">No one online.</div>`;
+
+        // keep offline list short (prevents huge sidebar)
+        const OFF_LIMIT = 12;
+        offlineEl.innerHTML = off.length
+          ? off.slice(0, OFF_LIMIT).map(u => personRow(u, false)).join("") +
+            (off.length > OFF_LIMIT ? `<div class="mini" style="padding-top:6px;">+${off.length - OFF_LIMIT} more…</div>` : "")
+          : `<div class="mini">Everyone is online 👀</div>`;
+      }catch(e){
+        // silent fail
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 10000);
   })();
 </script>
 {% endblock %}

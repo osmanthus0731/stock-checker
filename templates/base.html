@@ -413,5 +413,18 @@
       }
     })();
   </script>
+
+  <!-- ✅ Presence heartbeat (needed for Online/Offline box on admin dashboard) -->
+  <script>
+    (function(){
+      async function ping(){
+        try{
+          await fetch("/api/presence/ping", { method: "POST" });
+        }catch(e){}
+      }
+      ping();
+      setInterval(ping, 25000);
+    })();
+  </script>
 </body>
 </html>

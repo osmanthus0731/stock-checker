@@ -696,6 +696,83 @@ def api_pricing(uid):
     prices = _get_prices_for_part(uid)
     return jsonify(prices or {})
 
+# ---------------- Presence (Online users) ----------------
+ONLINE_WINDOW_SEC = 90  # online if active within last 90 seconds
+
+@app.route("/api/presence/ping", methods=["POST"])
+@login_required
+def presence_ping():
+    now = int(time.time())
+    uname = session.get("username")
+    role = session.get("role", "worker")
+
+    # store presence
+    presence.update_one(
+        {"username": uname},
+        {"$set": {"username": uname, "role": role, "last_seen": now}},
+        upsert=True
+    )
+
+    # optional: also store in users
+    users.update_one(
+        {"username": uname},
+        {"$set": {"last_seen": now}},
+        upsert=False
+    )
+
+    return jsonify({"ok": True, "ts": now})
+
+
+@app.route("/api/presence/status")
+@role_required("admin")
+def presence_status():
+    """
+    Returns online + offline users list for admin dashboard widget.
+    """
+    now = int(time.time())
+    cutoff = now - ONLINE_WINDOW_SEC
+
+    # Get ALL users (so we can show offline list too)
+    all_users = list(users.find({}, {"_id": 0, "username": 1, "role": 1}).sort("username", 1))
+
+    # Get presence for users within window
+    pres_rows = list(presence.find({}, {"_id": 0, "username": 1, "role": 1, "last_seen": 1}))
+    pres_map = {p["username"]: int(p.get("last_seen") or 0) for p in pres_rows if p.get("username")}
+
+    online = []
+    offline = []
+
+    for u in all_users:
+        uname = u.get("username") or ""
+        role = u.get("role") or "worker"
+        last_seen = pres_map.get(uname, 0)
+        seconds_ago = now - last_seen if last_seen else None
+
+        if last_seen and last_seen >= cutoff:
+            online.append({
+                "username": uname,
+                "role": role,
+                "seconds_ago": seconds_ago
+            })
+        else:
+            offline.append({
+                "username": uname,
+                "role": role,
+                "seconds_ago": seconds_ago
+            })
+
+    # online first, most recent first
+    online.sort(key=lambda x: x.get("seconds_ago", 10**9))
+    offline.sort(key=lambda x: (x.get("username") or "").lower())
+
+    return jsonify({
+        "ok": True,
+        "window": ONLINE_WINDOW_SEC,
+        "online": online,
+        "offline": offline
+    })
+
+
 # ---------------- Dashboards ----------------
 @app.route("/admin_dashboard", methods=["GET"])
 @role_required("admin")
