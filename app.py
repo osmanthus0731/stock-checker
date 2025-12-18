@@ -1,14 +1,13 @@
-# app.py — Mongo-first (Vercel-safe) inventory app with login + user management
+# app.py — Mongo-first (Vercel-safe) inventory app with login + user management + Presence (online users)
 from flask import (
-    Flask, render_template, render_template_string, request, redirect, url_for,
-    session, flash, send_file
+    Flask, render_template, render_template_string,
+    request, redirect, url_for, session, flash, send_file, jsonify
 )
 from pymongo import MongoClient
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 from dotenv import load_dotenv
 from io import BytesIO
-from flask import jsonify
 import os, qrcode, certifi, time, re
 
 load_dotenv()
@@ -27,10 +26,8 @@ FORCE_MONGO_ONLY = os.getenv("FORCE_MONGO_ONLY", "0") == "1"
 
 # ---------------- Field mapping (UI/form -> DB schema) ----------------
 FIELD_MAP = {"location": "Loc_FilmBox"}
-
 def map_field(ui_field: str) -> str:
     return FIELD_MAP.get(ui_field, ui_field)
-
 DB_TO_UI = {v: k for k, v in FIELD_MAP.items()}
 
 # ---------------- Emergency fallback admin (LAST RESORT) ----------------
@@ -64,6 +61,35 @@ products_col = db.get_collection("products")
 pricing_col = db.get_collection("pricing")
 admin_logs = db.get_collection("admin_logs")
 submissions = db.get_collection("submissions")
+presence = db.get_collection("presence")  # ✅ presence collection
+
+def _bootstrap_admin_if_needed():
+    if not BOOTSTRAP_USERS:
+        return
+    try:
+        client.admin.command("ping")
+        if users.estimated_document_count() == 0:
+            users.insert_one({
+                "username": BOOTSTRAP_ADMIN["username"],
+                "password": generate_password_hash(BOOTSTRAP_ADMIN["password"]),
+                "role": "admin",
+                "created_at": int(time.time()),
+                "bootstrap": True,
+            })
+            app.logger.warning("Bootstrapped admin user '%s' (users empty).", BOOTSTRAP_ADMIN["username"])
+    except Exception as e:
+        app.logger.exception("Bootstrap admin failed: %s", e)
+
+_bootstrap_admin_if_needed()
+
+# ---------- No-cache headers ----------
+@app.after_request
+def add_no_cache_headers(resp):
+    if not request.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
 
 # ---------------- Auth helpers ----------------
 def login_required(fn):
@@ -96,37 +122,9 @@ def _password_matches(stored: str, supplied: str) -> bool:
         return check_password_hash(stored, supplied)
     return stored == supplied
 
-def _bootstrap_admin_if_needed():
-    if not BOOTSTRAP_USERS:
-        return
-    try:
-        client.admin.command("ping")
-        if users.estimated_document_count() == 0:
-            users.insert_one({
-                "username": BOOTSTRAP_ADMIN["username"],
-                "password": generate_password_hash(BOOTSTRAP_ADMIN["password"]),
-                "role": "admin",
-                "created_at": int(time.time()),
-                "bootstrap": True,
-            })
-            app.logger.warning("Bootstrapped admin user '%s' (users empty).", BOOTSTRAP_ADMIN["username"])
-    except Exception as e:
-        app.logger.exception("Bootstrap admin failed: %s", e)
-
-_bootstrap_admin_if_needed()
-
-# ---------- No-cache headers ----------
-@app.after_request
-def add_no_cache_headers(resp):
-    if not request.path.startswith("/static/"):
-        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        resp.headers["Pragma"] = "no-cache"
-        resp.headers["Expires"] = "0"
-    return resp
-
 # ---------------- Inventory helpers ----------------
 ITEMS_PER_PAGE = 5                 # dashboard
-SEARCH_ITEMS_PER_PAGE = 20         # search page results per page
+SEARCH_ITEMS_PER_PAGE = 20         # search page
 
 _VOL_RE = re.compile(r"(\d{1,5})\s*ml\b", re.IGNORECASE)
 
@@ -171,10 +169,10 @@ def _normalize_mongo_product(p: dict) -> dict:
         }
 
     out = {
-        "uid": p.get("uid", "") or p.get("Part_id", ""),
-        "name": p.get("name", "") or p.get("Desc", ""),
-        "readable_id": p.get("readable_id", "") or p.get("Mssid", ""),
-        "category": p.get("category", "Uncategorized"),
+        "uid": p.get("uid", "") or p.get("Part_id", "") or "",
+        "name": p.get("name", "") or p.get("Desc", "") or "",
+        "readable_id": p.get("readable_id", "") or p.get("Mssid", "") or "",
+        "category": p.get("category", "Uncategorized") or "Uncategorized",
         "pict": p.get("pict", None),
         "stock": p.get("stock"),
         "volume_ml": p.get("volume_ml"),
@@ -247,7 +245,6 @@ def _all_products():
 def _get_product_by_uid(uid: str):
     return _get_product_by_uid_mongo(uid)
 
-# ✅ Location dropdown list builder (search page)
 def _all_locations_list():
     rows = _all_products()
     loc_set = set()
@@ -261,7 +258,7 @@ def _all_locations_list():
             loc_set.add(legacy)
     return sorted(loc_set)
 
-# ---------------- Pricing (Mongo-first) ----------------
+# ---------------- Pricing ----------------
 def _coerce_num(x):
     try:
         return float(x) if x not in (None, "") else None
@@ -347,7 +344,8 @@ def dbcheck():
         client.admin.command("ping")
         n_users = users.estimated_document_count()
         n_products = products_col.estimated_document_count()
-        return {"ok": True, "ping": "ok", "users": int(n_users), "products": int(n_products)}
+        n_presence = presence.estimated_document_count()
+        return {"ok": True, "ping": "ok", "users": int(n_users), "products": int(n_products), "presence": int(n_presence)}
     except Exception as e:
         return {"ok": False, "error": str(e)}, 503
 
@@ -539,8 +537,7 @@ def profile():
 
             users.update_one(
                 {"username": session["username"]},
-                {"$set": {"password": generate_password_hash(new1), "pw_changed_at": int(time.time())}
-                }
+                {"$set": {"password": generate_password_hash(new1), "pw_changed_at": int(time.time())}}
             )
             flash("Password changed.", "success")
             return redirect(url_for("profile"))
@@ -638,7 +635,7 @@ def view_pricing(uid):
 @login_required
 def debug_pricing(uid):
     prices = _get_prices_for_part(uid)
-    return prices or {"ok": False, "msg": "No pricing found in Mongo"}
+    return jsonify(prices or {"ok": False, "msg": "No pricing found in Mongo"})
 
 # ✅ Calculator route
 @app.route("/calculator", methods=["GET"])
@@ -650,15 +647,10 @@ def calculator_page():
         flash("No pricing found for that UID/MSSID.", "info")
     return render_template("calculator.html", prices=prices, uid=uid)
 
-# ---------------- API endpoints for product search and pricing fetch----------------
+# ---------------- API endpoints for product suggest and pricing ----------------
 @app.route("/api/products/suggest")
 @login_required
 def api_products_suggest():
-    """
-    Typeahead search for calculator product picker.
-    Search by uid / name / readable_id (MSSID) / legacy fields.
-    Returns top 20.
-    """
     q = (request.args.get("q") or "").strip()
     if not q:
         return jsonify([])
@@ -689,89 +681,92 @@ def api_products_suggest():
 @app.route("/api/pricing/<uid>")
 @login_required
 def api_pricing(uid):
-    """
-    Returns pricing JSON for calculator per line item.
-    Uses your existing pricing loader.
-    """
     prices = _get_prices_for_part(uid)
     return jsonify(prices or {})
 
-# ---------------- Presence (Online users) ----------------
-ONLINE_WINDOW_SEC = 90  # online if active within last 90 seconds
+# =========================
+# Presence (Online users)
+# =========================
+PRESENCE_TTL_SECONDS = 90  # online if pinged within last 90s
+
+def _ensure_presence_indexes():
+    try:
+        presence.create_index("username", unique=True)
+    except Exception:
+        pass
+    try:
+        presence.create_index("last_seen_at")
+    except Exception:
+        pass
+
+_ensure_presence_indexes()
 
 @app.route("/api/presence/ping", methods=["POST"])
 @login_required
-def presence_ping():
+def api_presence_ping():
     now = int(time.time())
-    uname = session.get("username")
-    role = session.get("role", "worker")
+    username = (session.get("username") or "").strip()
+    role = (session.get("role") or "worker").strip()
+    if not username:
+        return jsonify({"ok": False}), 401
 
-    # store presence
     presence.update_one(
-        {"username": uname},
-        {"$set": {"username": uname, "role": role, "last_seen": now}},
+        {"username": username},
+        {"$set": {"username": username, "role": role, "last_seen_at": now}},
         upsert=True
     )
 
-    # optional: also store in users
-    users.update_one(
-        {"username": uname},
-        {"$set": {"last_seen": now}},
-        upsert=False
-    )
+    # optional: also write last_seen in users collection (nice for auditing)
+    try:
+        users.update_one({"username": username}, {"$set": {"last_seen_at": now}})
+    except Exception:
+        pass
 
     return jsonify({"ok": True, "ts": now})
 
-
-@app.route("/api/presence/status")
+@app.route("/api/presence/status", methods=["GET"])
 @role_required("admin")
-def presence_status():
-    """
-    Returns online + offline users list for admin dashboard widget.
-    """
+def api_presence_status():
     now = int(time.time())
-    cutoff = now - ONLINE_WINDOW_SEC
+    cutoff = now - PRESENCE_TTL_SECONDS
 
-    # Get ALL users (so we can show offline list too)
+    pres_docs = list(presence.find({}, {"_id": 0, "username": 1, "role": 1, "last_seen_at": 1}))
+    last_map = {}
+    role_map = {}
+    for d in pres_docs:
+        u = (d.get("username") or "").strip()
+        if not u:
+            continue
+        last_map[u] = int(d.get("last_seen_at") or 0)
+        role_map[u] = d.get("role") or ""
+
     all_users = list(users.find({}, {"_id": 0, "username": 1, "role": 1}).sort("username", 1))
-
-    # Get presence for users within window
-    pres_rows = list(presence.find({}, {"_id": 0, "username": 1, "role": 1, "last_seen": 1}))
-    pres_map = {p["username"]: int(p.get("last_seen") or 0) for p in pres_rows if p.get("username")}
 
     online = []
     offline = []
-
     for u in all_users:
-        uname = u.get("username") or ""
-        role = u.get("role") or "worker"
-        last_seen = pres_map.get(uname, 0)
-        seconds_ago = now - last_seen if last_seen else None
+        uname = (u.get("username") or "").strip()
+        if not uname:
+            continue
+
+        role = (u.get("role") or role_map.get(uname) or "worker").strip()
+        last_seen = last_map.get(uname, 0)
+        seconds_ago = (now - last_seen) if last_seen else None
 
         if last_seen and last_seen >= cutoff:
-            online.append({
-                "username": uname,
-                "role": role,
-                "seconds_ago": seconds_ago
-            })
+            online.append({"username": uname, "role": role, "seconds_ago": seconds_ago})
         else:
-            offline.append({
-                "username": uname,
-                "role": role,
-                "seconds_ago": seconds_ago
-            })
+            offline.append({"username": uname, "role": role, "seconds_ago": seconds_ago})
 
-    # online first, most recent first
-    online.sort(key=lambda x: x.get("seconds_ago", 10**9))
+    online.sort(key=lambda x: (x.get("seconds_ago") if x.get("seconds_ago") is not None else 10**9))
     offline.sort(key=lambda x: (x.get("username") or "").lower())
 
     return jsonify({
         "ok": True,
-        "window": ONLINE_WINDOW_SEC,
+        "window": PRESENCE_TTL_SECONDS,
         "online": online,
         "offline": offline
     })
-
 
 # ---------------- Dashboards ----------------
 @app.route("/admin_dashboard", methods=["GET"])
@@ -837,10 +832,6 @@ def _safe_int(v, default=0):
         return default
 
 def _sort_rows(rows, sort_by: str):
-    """
-    IMPORTANT: this sorts the ENTIRE matching result set FIRST,
-    then we paginate AFTER sorting. That fixes the 'only first page sorted' issue.
-    """
     sort_by = (sort_by or "name_asc").strip()
 
     if sort_by == "name_asc":
@@ -874,7 +865,6 @@ def _paginate(rows, page: int, per_page: int):
     end = start + per_page
     paginated = rows[start:end]
 
-    # page window (nice UI)
     window = 7
     half = window // 2
     start_p = max(1, page - half)
@@ -888,7 +878,6 @@ def _render_search(role):
     result = []
     message = None
 
-    # inputs
     q_get = (request.args.get("q") or "").strip().lower()
     q_form = (request.form.get("search_uid") or "").strip().lower()
     q = (q_form or q_get or "").strip()
@@ -896,22 +885,17 @@ def _render_search(role):
     selected_cat = (request.values.get("filter_category") or "All").strip()
     selected_vol = (request.values.get("volume") or "").strip()
     selected_location = (request.values.get("location") or "").strip().lower()
-
     sort_by = (request.values.get("sort") or "name_asc").strip()
 
-    # pagination controls (search page)
     page = request.args.get("page", 1, type=int)
     per_page = request.args.get("per_page", SEARCH_ITEMS_PER_PAGE, type=int)
     per_page = max(5, min(per_page, 200))
 
-    # location dropdown list
     locations_list = _all_locations_list()
 
-    # Build matching rows (filter first)
     if request.method == "POST" or q_get or selected_cat != "All" or selected_vol or selected_location:
         rows = _all_products()
 
-        # keyword search (multi-keyword AND)
         if q:
             keys = q.split()
             rows = [
@@ -923,7 +907,6 @@ def _render_search(role):
                 ]).lower() for k in keys)
             ]
 
-        # filters
         if selected_cat != "All":
             rows = [p for p in rows if (p.get("category") or "Uncategorized") == selected_cat]
 
@@ -937,19 +920,14 @@ def _render_search(role):
         if selected_location:
             rows = [p for p in rows if _matches_location(p, selected_location)]
 
-        # ✅ SORT THE WHOLE SEQUENCE FIRST
         rows = _sort_rows(rows, sort_by)
-
-        # ✅ THEN paginate
         result, total_items, total_pages, pages, page = _paginate(rows, page, per_page)
 
         if total_items == 0:
             message = "No matching products found."
     else:
-        # default: empty state until user searches/filters
         total_items, total_pages, pages = 0, 1, [1]
 
-    # dropdowns
     all_rows = _all_products()
     cats = sorted({p.get("category") or "Uncategorized" for p in all_rows})
     vols = sorted({int(p["volume_ml"]) for p in all_rows if p.get("volume_ml")})
@@ -963,13 +941,11 @@ def _render_search(role):
         volumes=vols,
         locations_list=locations_list,
 
-        # keep selections
         sort_by=sort_by,
         selected_category=selected_cat,
         selected_volume=selected_vol,
         selected_location=(request.values.get("location") or "").strip(),
 
-        # pagination for search
         page=page,
         total_pages=total_pages,
         pages=pages,

@@ -2,12 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Mizitco Inventory</title>
+  <title>{% block title %}Mizitco Inventory{% endblock %}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root{
-      --sb-w: 220px;           /* expanded width */
-      --sb-w-collapsed: 64px;  /* collapsed width */
+      --sb-w: 220px;
+      --sb-w-collapsed: 64px;
       --sb-bg: #111418;
       --sb-hover:#1a1f24;
       --sb-stroke:#2b333a;
@@ -203,20 +203,18 @@
           <span class="sb-label">Search</span>
         </a>
 
-        <!-- ✅ Calculator (admin) -->
         <a class="sb-item {% if request.endpoint=='calculator_page' %}active{% endif %}"
            href="{{ url_for('calculator_page') }}" data-tip="Calculator">
           <span class="sb-ico">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="6" y="2" width="12" height="20" rx="2"/>
-              <path d="M8 6h8"/><path d="M8 10h2"/><path d="M12 10h2"/><path d="M16 10h0"/>
+              <path d="M8 6h8"/><path d="M8 10h2"/><path d="M12 10h2"/>
               <path d="M8 14h2"/><path d="M12 14h2"/><path d="M8 18h8"/>
             </svg>
           </span>
           <span class="sb-label">Calculator</span>
         </a>
 
-        <!-- New account (admin only) -->
         <a class="sb-item {% if request.endpoint=='create_user' %}active{% endif %}"
            href="{{ url_for('create_user') }}" data-tip="New account">
           <span class="sb-ico">
@@ -249,7 +247,6 @@
           <span class="sb-label">Search</span>
         </a>
 
-        <!-- ✅ Calculator (worker) -->
         <a class="sb-item {% if request.endpoint=='calculator_page' %}active{% endif %}"
            href="{{ url_for('calculator_page') }}" data-tip="Calculator">
           <span class="sb-ico">
@@ -330,11 +327,10 @@
     (function(){
       const sidebar = document.getElementById('sidebar');
       const page = document.getElementById('page');
-      const mHandle = document.getElementById('mHandle');   // inside sidebar (desktop)
-      const burger = document.getElementById('burger');     // topbar (mobile)
+      const mHandle = document.getElementById('mHandle');
+      const burger = document.getElementById('burger');
       const scrim = document.getElementById('scrim');
 
-      // Remember last state (pinned = expanded)
       let pinned = localStorage.getItem('sb_pinned') === '1';
       applyState();
 
@@ -348,7 +344,6 @@
         applyState();
       }
 
-      // Desktop: toggle with the purple "M" handle
       mHandle.addEventListener('click', () => {
         if (window.innerWidth <= 820){
           pinned = true; applyState(); scrim.classList.add('show');
@@ -357,18 +352,15 @@
         }
       });
 
-      // Mobile: hamburger opens overlay
       burger.addEventListener('click', () => {
         pinned = true; applyState(); scrim.classList.add('show');
       });
 
-      // Close overlay on scrim
       scrim.addEventListener('click', () => {
         scrim.classList.remove('show');
         pinned = false; applyState();
       });
 
-      // Resize behavior
       window.addEventListener('resize', () => {
         if (window.innerWidth > 820){
           scrim.classList.remove('show');
@@ -378,7 +370,6 @@
         }
       });
 
-      // confirmation for links with data-confirm
       document.addEventListener('click', (e) => {
         const a = e.target.closest('a[data-confirm]');
         if (!a) return;
@@ -386,7 +377,6 @@
         if (!confirm(msg)) { e.preventDefault(); e.stopPropagation(); }
       });
 
-      // === User popover logic ===
       const userBtn = document.getElementById('userBtn');
       const userMenu = document.getElementById('userMenu');
 
@@ -414,17 +404,22 @@
     })();
   </script>
 
-  <!-- ✅ Presence heartbeat (needed for Online/Offline box on admin dashboard) -->
+  <!-- ✅ Presence heartbeat: update "presence" collection so People box can show Online -->
   <script>
     (function(){
       async function ping(){
         try{
-          await fetch("/api/presence/ping", { method: "POST" });
+          await fetch("/api/presence/ping", {
+            method: "POST",
+            headers: {"Accept":"application/json"}
+          });
         }catch(e){}
       }
       ping();
       setInterval(ping, 25000);
     })();
   </script>
+
+  {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -41,7 +41,7 @@
   .jump input{min-width:110px}
   .tiny{font-size:.85rem}
 
-  /* --- NEW: two-column layout for dashboard + right sidebar --- */
+  /* --- two-column layout for dashboard + right sidebar --- */
   .dash-grid{
     display:grid;
     grid-template-columns: 1fr 320px;
@@ -52,7 +52,7 @@
     .dash-grid{grid-template-columns: 1fr;}
   }
 
-  /* --- NEW: People widget styles --- */
+  /* --- People widget styles --- */
   .people-card{position:sticky; top:14px;}
   @media (max-width: 1100px){
     .people-card{position:relative; top:auto;}
@@ -78,7 +78,7 @@
 </style>
 
 <div class="dash-grid">
-  <!-- ================= LEFT: existing dashboard ================= -->
+  <!-- ================= LEFT: dashboard table ================= -->
   <div>
     <h1 style="margin:0 0 8px">Admin Dashboard</h1>
     <p class="muted" style="margin:0 0 14px;">Filter, view, and jump to pricing.</p>
@@ -242,6 +242,7 @@
 </div>
 
 <script>
+  // QR toggle
   function toggleQR(uid){
     const wrap = document.getElementById('qrwrap-' + uid);
     if(!wrap) return;
@@ -265,7 +266,7 @@
     wrap.style.display = 'block';
   }
 
-  // ✅ Instant page jump (Enter OR leaving the input)
+  // Instant page jump (Enter or blur)
   (function(){
     const inp = document.getElementById("pageJump");
     if(!inp) return;
@@ -292,11 +293,13 @@
     inp.addEventListener("blur", () => { go(); });
   })();
 
-  // ✅ People Online/Offline widget (requires /api/presence/status in app.py)
+  // ✅ People Online/Offline widget (needs /api/presence/status in app.py)
   (function(){
     const meta = document.getElementById("presenceMeta");
     const onlineEl = document.getElementById("onlineList");
     const offlineEl = document.getElementById("offlineList");
+
+    if (!meta || !onlineEl || !offlineEl) return;
 
     function esc(s){
       return String(s ?? "")
@@ -326,9 +329,10 @@
 
     async function refresh(){
       try{
-        const res = await fetch("/api/presence/status", {headers: {"Accept":"application/json"}});
+        const res = await fetch("/api/presence/status", { headers: { "Accept": "application/json" }});
+        if(!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        if(!data.ok) return;
+        if(!data || !data.ok) throw new Error("bad json");
 
         const on = data.online || [];
         const off = data.offline || [];
@@ -339,14 +343,15 @@
           ? on.map(u => personRow(u, true)).join("")
           : `<div class="mini">No one online.</div>`;
 
-        // keep offline list short (prevents huge sidebar)
         const OFF_LIMIT = 12;
         offlineEl.innerHTML = off.length
           ? off.slice(0, OFF_LIMIT).map(u => personRow(u, false)).join("") +
             (off.length > OFF_LIMIT ? `<div class="mini" style="padding-top:6px;">+${off.length - OFF_LIMIT} more…</div>` : "")
           : `<div class="mini">Everyone is online 👀</div>`;
       }catch(e){
-        // silent fail
+        meta.textContent = "Presence offline";
+        onlineEl.innerHTML = `<div class="mini">Loading failed.</div>`;
+        offlineEl.innerHTML = `<div class="mini">Loading failed.</div>`;
       }
     }
 
