@@ -8,6 +8,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 from dotenv import load_dotenv
 from io import BytesIO
+from flask import jsonify
 import os, qrcode, certifi, time, re
 
 load_dotenv()
@@ -124,7 +125,9 @@ def add_no_cache_headers(resp):
     return resp
 
 # ---------------- Inventory helpers ----------------
-ITEMS_PER_PAGE = 5
+ITEMS_PER_PAGE = 5                 # dashboard
+SEARCH_ITEMS_PER_PAGE = 20         # search page results per page
+
 _VOL_RE = re.compile(r"(\d{1,5})\s*ml\b", re.IGNORECASE)
 
 def _extract_volume_ml(text: str):
@@ -536,7 +539,8 @@ def profile():
 
             users.update_one(
                 {"username": session["username"]},
-                {"$set": {"password": generate_password_hash(new1), "pw_changed_at": int(time.time())}}
+                {"$set": {"password": generate_password_hash(new1), "pw_changed_at": int(time.time())}
+                }
             )
             flash("Password changed.", "success")
             return redirect(url_for("profile"))
@@ -646,6 +650,52 @@ def calculator_page():
         flash("No pricing found for that UID/MSSID.", "info")
     return render_template("calculator.html", prices=prices, uid=uid)
 
+# ---------------- API endpoints for product search and pricing fetch----------------
+@app.route("/api/products/suggest")
+@login_required
+def api_products_suggest():
+    """
+    Typeahead search for calculator product picker.
+    Search by uid / name / readable_id (MSSID) / legacy fields.
+    Returns top 20.
+    """
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify([])
+
+    rx = re.compile(re.escape(q), re.IGNORECASE)
+
+    cursor = products_col.find(
+        {"$or": [
+            {"uid": rx},
+            {"name": rx},
+            {"readable_id": rx},
+            {"Part_id": rx},
+            {"Desc": rx},
+            {"Mssid": rx},
+        ]},
+        {"_id": 0, "uid": 1, "name": 1, "readable_id": 1, "Part_id": 1, "Desc": 1, "Mssid": 1}
+    ).limit(20)
+
+    out = []
+    for d in cursor:
+        uid = d.get("uid") or d.get("Part_id") or ""
+        name = d.get("name") or d.get("Desc") or ""
+        rid = d.get("readable_id") or d.get("Mssid") or ""
+        if uid or name:
+            out.append({"uid": uid, "name": name, "readable_id": rid})
+    return jsonify(out)
+
+@app.route("/api/pricing/<uid>")
+@login_required
+def api_pricing(uid):
+    """
+    Returns pricing JSON for calculator per line item.
+    Uses your existing pricing loader.
+    """
+    prices = _get_prices_for_part(uid)
+    return jsonify(prices or {})
+
 # ---------------- Dashboards ----------------
 @app.route("/admin_dashboard", methods=["GET"])
 @role_required("admin")
@@ -655,7 +705,6 @@ def admin_dashboard():
 @app.route("/index", methods=["GET"])
 @role_required("worker")
 def index():
-    # If you want workers to also paginate, change this to **_inventory_ctx()
     ctx = _inventory_ctx()
     return render_template("index.html", role="worker", **ctx)
 
@@ -697,59 +746,92 @@ def admin_logs_stub():
     return redirect(url_for("admin_dashboard"))
 
 # ---------------- Search ----------------
+def _safe_int(v, default=0):
+    try:
+        if v is None:
+            return default
+        if isinstance(v, (int, float)):
+            return int(v)
+        s = str(v).strip()
+        if s == "":
+            return default
+        return int(float(s))
+    except Exception:
+        return default
+
+def _sort_rows(rows, sort_by: str):
+    """
+    IMPORTANT: this sorts the ENTIRE matching result set FIRST,
+    then we paginate AFTER sorting. That fixes the 'only first page sorted' issue.
+    """
+    sort_by = (sort_by or "name_asc").strip()
+
+    if sort_by == "name_asc":
+        return sorted(rows, key=lambda p: (p.get("name") or "").lower())
+    if sort_by == "name_desc":
+        return sorted(rows, key=lambda p: (p.get("name") or "").lower(), reverse=True)
+
+    if sort_by == "uid_asc":
+        return sorted(rows, key=lambda p: (p.get("uid") or "").lower())
+    if sort_by == "uid_desc":
+        return sorted(rows, key=lambda p: (p.get("uid") or "").lower(), reverse=True)
+
+    if sort_by == "volume_asc":
+        return sorted(rows, key=lambda p: (_safe_int(p.get("volume_ml"), 10**9), (p.get("name") or "").lower()))
+    if sort_by == "volume_desc":
+        return sorted(rows, key=lambda p: (_safe_int(p.get("volume_ml"), -1), (p.get("name") or "").lower()), reverse=True)
+
+    if sort_by == "stock_asc":
+        return sorted(rows, key=lambda p: (_safe_int(p.get("stock"), 10**9), (p.get("name") or "").lower()))
+    if sort_by == "stock_desc":
+        return sorted(rows, key=lambda p: (_safe_int(p.get("stock"), -1), (p.get("name") or "").lower()), reverse=True)
+
+    return sorted(rows, key=lambda p: (p.get("name") or "").lower())
+
+def _paginate(rows, page: int, per_page: int):
+    total_items = len(rows)
+    total_pages = max(1, (total_items + per_page - 1) // per_page)
+    page = max(1, min(page, total_pages))
+
+    start = (page - 1) * per_page
+    end = start + per_page
+    paginated = rows[start:end]
+
+    # page window (nice UI)
+    window = 7
+    half = window // 2
+    start_p = max(1, page - half)
+    end_p = min(total_pages, start_p + window - 1)
+    start_p = max(1, end_p - window + 1)
+    pages = list(range(start_p, end_p + 1))
+
+    return paginated, total_items, total_pages, pages, page
+
 def _render_search(role):
-    result, message = [], None
+    result = []
+    message = None
+
+    # inputs
     q_get = (request.args.get("q") or "").strip().lower()
+    q_form = (request.form.get("search_uid") or "").strip().lower()
+    q = (q_form or q_get or "").strip()
 
-    locations_list = _all_locations_list()
+    selected_cat = (request.values.get("filter_category") or "All").strip()
+    selected_vol = (request.values.get("volume") or "").strip()
+    selected_location = (request.values.get("location") or "").strip().lower()
 
-    # sort key from querystring or form
     sort_by = (request.values.get("sort") or "name_asc").strip()
 
-    def _safe_int(v, default=0):
-        try:
-            if v is None:
-                return default
-            if isinstance(v, (int, float)):
-                return int(v)
-            s = str(v).strip()
-            if s == "":
-                return default
-            return int(float(s))
-        except Exception:
-            return default
+    # pagination controls (search page)
+    page = request.args.get("page", 1, type=int)
+    per_page = request.args.get("per_page", SEARCH_ITEMS_PER_PAGE, type=int)
+    per_page = max(5, min(per_page, 200))
 
-    def _sort_rows(rows, sort_by):
-        # stable + safe sort helpers
-        if sort_by == "name_asc":
-            return sorted(rows, key=lambda p: (p.get("name") or "").lower())
-        if sort_by == "name_desc":
-            return sorted(rows, key=lambda p: (p.get("name") or "").lower(), reverse=True)
+    # location dropdown list
+    locations_list = _all_locations_list()
 
-        if sort_by == "uid_asc":
-            return sorted(rows, key=lambda p: (p.get("uid") or "").lower())
-        if sort_by == "uid_desc":
-            return sorted(rows, key=lambda p: (p.get("uid") or "").lower(), reverse=True)
-
-        if sort_by == "volume_asc":
-            return sorted(rows, key=lambda p: (_safe_int(p.get("volume_ml"), 10**9), (p.get("name") or "").lower()))
-        if sort_by == "volume_desc":
-            return sorted(rows, key=lambda p: (_safe_int(p.get("volume_ml"), -1), (p.get("name") or "").lower()), reverse=True)
-
-        if sort_by == "stock_asc":
-            return sorted(rows, key=lambda p: (_safe_int(p.get("stock"), 10**9), (p.get("name") or "").lower()))
-        if sort_by == "stock_desc":
-            return sorted(rows, key=lambda p: (_safe_int(p.get("stock"), -1), (p.get("name") or "").lower()), reverse=True)
-
-        # fallback
-        return sorted(rows, key=lambda p: (p.get("name") or "").lower())
-
-    if request.method == "POST" or q_get:
-        q = (request.form.get("search_uid") or q_get or "").strip().lower()
-        selected_cat = (request.values.get("filter_category") or "All").strip()
-        selected_vol = (request.values.get("volume") or "").strip()
-        selected_location = (request.values.get("location") or "").strip().lower()
-
+    # Build matching rows (filter first)
+    if request.method == "POST" or q_get or selected_cat != "All" or selected_vol or selected_location:
         rows = _all_products()
 
         # keyword search (multi-keyword AND)
@@ -778,13 +860,19 @@ def _render_search(role):
         if selected_location:
             rows = [p for p in rows if _matches_location(p, selected_location)]
 
-        # apply sorting here
+        # ✅ SORT THE WHOLE SEQUENCE FIRST
         rows = _sort_rows(rows, sort_by)
 
-        result = rows
-        if not result:
-            message = "No matching products found."
+        # ✅ THEN paginate
+        result, total_items, total_pages, pages, page = _paginate(rows, page, per_page)
 
+        if total_items == 0:
+            message = "No matching products found."
+    else:
+        # default: empty state until user searches/filters
+        total_items, total_pages, pages = 0, 1, [1]
+
+    # dropdowns
     all_rows = _all_products()
     cats = sorted({p.get("category") or "Uncategorized" for p in all_rows})
     vols = sorted({int(p["volume_ml"]) for p in all_rows if p.get("volume_ml")})
@@ -798,8 +886,19 @@ def _render_search(role):
         volumes=vols,
         locations_list=locations_list,
 
-        #  pass current sort selection back to template
+        # keep selections
         sort_by=sort_by,
+        selected_category=selected_cat,
+        selected_volume=selected_vol,
+        selected_location=(request.values.get("location") or "").strip(),
+
+        # pagination for search
+        page=page,
+        total_pages=total_pages,
+        pages=pages,
+        per_page=per_page,
+        total_items=total_items,
+        q=q,
     )
 
 @app.route("/search/admin", methods=["GET", "POST"])

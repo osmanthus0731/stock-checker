@@ -1,182 +1,398 @@
-{% extends "index.html" %}
+{% extends "base.html" %}
 {% block title %}Calculator{% endblock %}
 
 {% block content %}
 <style>
-  .card{
-    background:#fff;
-    border:1px solid #e5e7eb;
-    border-radius:14px;
-    padding:14px;
-    box-shadow:0 1px 2px rgba(0,0,0,.04);
-    margin:12px 0;
-  }
-  .row{ display:flex; gap:10px; align-items:end; flex-wrap:wrap; }
-  label{ font-weight:600; color:#111827; display:block; margin-bottom:6px; }
-  input, select{
-    border:1px solid #e5e7eb;
-    border-radius:10px;
-    padding:10px 12px;
-    outline:none;
-    min-width:180px;
-  }
+  .wrap{max-width:1100px;margin:0 auto;padding:14px}
+  .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:14px;box-shadow:0 1px 2px rgba(0,0,0,.04);margin-bottom:12px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
   .btn{
-    background:#111827 !important;
-    color:#fff !important;
-    border:1px solid #e5e7eb !important;
-    border-radius:10px !important;
-    padding:8px 12px !important;
-    cursor:pointer !important;
-    text-decoration:none !important;
-    display:inline-flex !important;
-    align-items:center !important;
-    gap:6px !important;
+    background:#111827 !important;color:#fff !important;border:1px solid #e5e7eb !important;
+    border-radius:10px !important;padding:8px 12px !important;cursor:pointer !important;
+    text-decoration:none !important;display:inline-flex !important;align-items:center !important;gap:6px !important;
   }
   .btn:hover{opacity:.92}
-  .muted{ color:#6b7280; }
-  .big{ font-size:22px; font-weight:800; }
-  .warn{
-    background:#fff7ed;
-    border:1px solid #fed7aa;
-    color:#9a3412;
-    padding:10px 12px;
-    border-radius:12px;
-    margin-top:10px;
-    display:none;
+  .btn-ghost{
+    background:#f3f4f6 !important;color:#111827 !important;border:1px solid #e5e7eb !important;
   }
+  input, select{
+    padding:10px;border:1px solid #e5e7eb;border-radius:10px;outline:none;
+  }
+  table{width:100%;border-collapse:collapse}
+  thead th{background:#f8fafc;border-bottom:1px solid #e5e7eb;padding:10px;text-align:left;color:#374151}
+  tbody td{border-bottom:1px solid #eef2f7;padding:10px;vertical-align:top}
+  .muted{color:#6b7280}
+  .pill{display:inline-block;border:1px solid #e5e7eb;border-radius:999px;padding:4px 10px;margin:2px;background:#fff}
+  .right{text-align:right}
+  .w-uid{min-width:340px}
+  .w-sm{width:160px}
+  .w-xs{width:110px}
+  .danger{color:#b91c1c}
 </style>
 
-<h1>Calculator</h1>
+<div class="wrap">
+  <h1 style="margin:0 0 12px;">Calculator</h1>
 
-<div class="card">
-  <form method="get" class="row">
-    <div>
-      <label for="uid">UID / MSSID</label>
-      <input id="uid" name="uid" placeholder="Enter UID or MSSID..." value="{{ uid or '' }}">
-      <div class="muted" style="margin-top:6px;">Tip: paste the item UID, then click Load</div>
-    </div>
-    <button class="btn" type="submit">Load</button>
-  </form>
-</div>
-
-{% if prices %}
   <div class="card">
-    <div style="font-size:18px;font-weight:800;">{{ prices.name or "Item" }}</div>
-    <div class="muted">Part-ID: <strong>{{ prices.uid }}</strong></div>
+    <div class="row" style="justify-content:space-between;">
+      <div>
+        <div style="font-weight:700;margin-bottom:4px;">Multi-Product Total Calculator</div>
+        <div class="muted">Search by product name / UID / MSSID, pick item, choose Type + Tier, enter qty.</div>
+      </div>
+      <div class="row">
+        <button class="btn" type="button" id="btnAddLine">+ Add Line</button>
+        <button class="btn btn-ghost" type="button" id="btnClear">Clear</button>
+      </div>
+    </div>
   </div>
 
   <div class="card">
-    <h2 style="margin:0 0 10px;">Total Calculator</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Product (search & choose)</th>
+          <th>Type</th>
+          <th>Tier</th>
+          <th class="right">Qty</th>
+          <th class="right">Unit Price</th>
+          <th class="right">Line Total</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="linesBody"></tbody>
+      <tfoot>
+        <tr>
+          <td colspan="4"></td>
+          <td style="font-weight:800;" class="right">Grand Total</td>
+          <td style="font-weight:900;" class="right" id="grandTotal">—</td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>
 
-    <div class="row" style="margin-bottom:10px;">
-      <div>
-        <label for="calcType">Type</label>
-        <select id="calcType">
+    <div id="warnBox" class="muted" style="margin-top:10px;display:none;">
+      <span class="pill danger">Some lines don’t have pricing yet — check Type/Tier or product selection.</span>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ---------- helpers ----------
+  const fmtMoney = (x) => {
+    if (x === null || x === undefined || Number.isNaN(Number(x))) return "—";
+    return Number(x).toFixed(2);
+  };
+
+  const safeInt = (v, d=0) => {
+    const n = parseInt(String(v ?? "").trim(), 10);
+    return Number.isFinite(n) ? n : d;
+  };
+
+  const debounce = (fn, ms=250) => {
+    let t = null;
+    return (...args) => {
+      clearTimeout(t);
+      t = setTimeout(() => fn(...args), ms);
+    };
+  };
+
+  // ---------- state ----------
+  let lineId = 0;
+  const pricingCache = new Map(); // uid -> pricing json
+
+  // ---------- DOM ----------
+  const body = document.getElementById("linesBody");
+  const grandTotalEl = document.getElementById("grandTotal");
+  const warnBox = document.getElementById("warnBox");
+  const btnAddLine = document.getElementById("btnAddLine");
+  const btnClear = document.getElementById("btnClear");
+
+  // ---------- API ----------
+  async function suggestProducts(q) {
+    const res = await fetch(`/api/products/suggest?q=${encodeURIComponent(q)}`, {headers: {"Accept":"application/json"}});
+    if (!res.ok) return [];
+    return await res.json();
+  }
+
+  async function fetchPricing(uid) {
+    if (!uid) return null;
+    if (pricingCache.has(uid)) return pricingCache.get(uid);
+
+    const res = await fetch(`/api/pricing/${encodeURIComponent(uid)}`, {headers: {"Accept":"application/json"}});
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    pricingCache.set(uid, data || {});
+    return data || {};
+  }
+
+  // ---------- build line row ----------
+  function makeLineRow() {
+    const id = ++lineId;
+
+    const tr = document.createElement("tr");
+    tr.dataset.lineId = String(id);
+
+    tr.innerHTML = `
+      <td class="w-uid">
+        <input type="text" class="prodInput" placeholder="Type product name / UID / MSSID…" style="width:100%;" autocomplete="off">
+        <div class="muted" style="margin-top:6px;">
+          <span class="pill prodChosen">No product selected</span>
+        </div>
+        <div class="suggestBox" style="position:relative;"></div>
+      </td>
+
+      <td class="w-sm">
+        <select class="typeSel">
           <option value="P">Purchasing (P)</option>
           <option value="S">Selling (S)</option>
         </select>
-      </div>
+      </td>
 
-      <div>
-        <label for="calcTier">Tier</label>
-        <select id="calcTier"></select>
-      </div>
+      <td class="w-sm">
+        <select class="tierSel">
+          <option value="">—</option>
+        </select>
+      </td>
 
-      <div>
-        <label for="calcQty">Quantity</label>
-        <input id="calcQty" type="number" min="0" step="1" value="0" />
-      </div>
+      <td class="right w-xs">
+        <input type="number" class="qtyInput" value="0" min="0" step="1" style="width:110px;text-align:right;">
+      </td>
 
-      <div style="min-width:220px;">
-        <label>Unit Price</label>
-        <div id="unitPrice" class="big">—</div>
-      </div>
+      <td class="right w-xs" style="font-weight:700;">
+        <span class="unitPrice">—</span>
+      </td>
 
-      <div style="min-width:220px;">
-        <label>Total</label>
-        <div id="totalPrice" class="big">—</div>
-      </div>
-    </div>
+      <td class="right w-xs" style="font-weight:800;">
+        <span class="lineTotal">—</span>
+      </td>
 
-    <div id="calcWarn" class="warn">
-      This tier has no price set. Pick another tier.
-    </div>
+      <td class="right">
+        <button class="btn btn-ghost btnRemove" type="button">Remove</button>
+      </td>
+    `;
 
-    <div style="margin-top:12px;">
-      <a class="btn" href="{{ url_for('view_pricing', uid=prices.uid) }}">View Pricing Table</a>
-    </div>
-  </div>
+    // attach behavior
+    const prodInput = tr.querySelector(".prodInput");
+    const prodChosen = tr.querySelector(".prodChosen");
+    const suggestBox = tr.querySelector(".suggestBox");
 
-  {% if prices %}
-<script>
-  const PRICES = {{ prices|tojson }};
-  const tierOrder = ["S12","S100","S500","1K","3K","5K","10K"];
-  // calculator JS here
-</script>
-{% endif %}
+    const typeSel = tr.querySelector(".typeSel");
+    const tierSel = tr.querySelector(".tierSel");
+    const qtyInput = tr.querySelector(".qtyInput");
 
-    const elType = document.getElementById("calcType");
-    const elTier = document.getElementById("calcTier");
-    const elQty  = document.getElementById("calcQty");
-    const elUnit = document.getElementById("unitPrice");
-    const elTotal= document.getElementById("totalPrice");
-    const elWarn = document.getElementById("calcWarn");
+    const unitPriceEl = tr.querySelector(".unitPrice");
+    const lineTotalEl = tr.querySelector(".lineTotal");
+    const btnRemove = tr.querySelector(".btnRemove");
 
-    function fmtMoney(x){
-      if (x === null || x === undefined || Number.isNaN(x)) return "—";
-      return Number(x).toFixed(2);
+    // store selected uid on row
+    tr.dataset.uid = "";
+
+    function clearSuggest() {
+      suggestBox.innerHTML = "";
     }
 
-    function getBucket(){
-      return (elType.value === "S") ? (PRICES.S || {}) : (PRICES.P || {});
-    }
+    function renderSuggest(items) {
+      clearSuggest();
+      if (!items || items.length === 0) return;
 
-    function rebuildTierOptions(){
-      const bucket = getBucket();
-      elTier.innerHTML = "";
-      tierOrder.forEach(k => {
-        const opt = document.createElement("option");
-        opt.value = k;
-        const val = bucket[k];
-        opt.textContent = (val !== null && val !== undefined) ? `${k} (${fmtMoney(val)})` : `${k} (—)`;
-        elTier.appendChild(opt);
+      const box = document.createElement("div");
+      box.style.position = "absolute";
+      box.style.left = "0";
+      box.style.right = "0";
+      box.style.top = "6px";
+      box.style.background = "#fff";
+      box.style.border = "1px solid #e5e7eb";
+      box.style.borderRadius = "12px";
+      box.style.boxShadow = "0 8px 24px rgba(0,0,0,.08)";
+      box.style.zIndex = "50";
+      box.style.maxHeight = "260px";
+      box.style.overflow = "auto";
+
+      items.forEach(it => {
+        const uid = it.uid || "";
+        const name = it.name || "";
+        const rid = it.readable_id || "";
+
+        const row = document.createElement("div");
+        row.style.padding = "10px 12px";
+        row.style.cursor = "pointer";
+        row.style.borderBottom = "1px solid #f1f5f9";
+        row.innerHTML = `
+          <div style="font-weight:800;color:#111827;">${escapeHtml(name || uid)}</div>
+          <div class="muted" style="font-size:12px;">UID: ${escapeHtml(uid)} ${rid ? ` • MSSID: ${escapeHtml(rid)}` : ""}</div>
+        `;
+
+        row.addEventListener("click", async () => {
+          // select product
+          tr.dataset.uid = uid;
+          prodInput.value = name ? `${name}` : uid;
+          prodChosen.textContent = `${name || uid}  •  ${uid}`;
+          clearSuggest();
+
+          // load pricing then rebuild tiers + recalc
+          const prices = await fetchPricing(uid);
+          rebuildTiers(prices, typeSel.value, tierSel);
+          recalcLine(prices, typeSel.value, tierSel.value, qtyInput.value, unitPriceEl, lineTotalEl);
+          recalcGrand();
+        });
+
+        box.appendChild(row);
       });
+
+      suggestBox.appendChild(box);
     }
 
-    function recalc(){
-      const bucket = getBucket();
-      const tier = elTier.value;
-      const unit = bucket[tier];
+    const doSuggest = debounce(async () => {
+      const txt = (prodInput.value || "").trim();
+      if (txt.length < 2) { clearSuggest(); return; }
+      const items = await suggestProducts(txt);
+      renderSuggest(items);
+    }, 250);
 
-      const qty = Math.max(0, parseInt(elQty.value || "0", 10));
-      elQty.value = qty;
+    prodInput.addEventListener("input", doSuggest);
+    prodInput.addEventListener("blur", () => setTimeout(clearSuggest, 120)); // allow click to register
 
-      if (unit === null || unit === undefined || unit === "" || Number.isNaN(Number(unit))){
-        elUnit.textContent = "—";
-        elTotal.textContent = "—";
-        elWarn.style.display = "block";
+    // Type/Tier/Qty changes
+    typeSel.addEventListener("change", async () => {
+      const uid = tr.dataset.uid;
+      const prices = uid ? await fetchPricing(uid) : null;
+      rebuildTiers(prices, typeSel.value, tierSel);
+      recalcLine(prices, typeSel.value, tierSel.value, qtyInput.value, unitPriceEl, lineTotalEl);
+      recalcGrand();
+    });
+
+    tierSel.addEventListener("change", async () => {
+      const uid = tr.dataset.uid;
+      const prices = uid ? await fetchPricing(uid) : null;
+      recalcLine(prices, typeSel.value, tierSel.value, qtyInput.value, unitPriceEl, lineTotalEl);
+      recalcGrand();
+    });
+
+    qtyInput.addEventListener("input", async () => {
+      const uid = tr.dataset.uid;
+      const prices = uid ? await fetchPricing(uid) : null;
+      recalcLine(prices, typeSel.value, tierSel.value, qtyInput.value, unitPriceEl, lineTotalEl);
+      recalcGrand();
+    });
+
+    // remove
+    btnRemove.addEventListener("click", () => {
+      tr.remove();
+      recalcGrand();
+    });
+
+    // init tiers empty
+    rebuildTiers(null, typeSel.value, tierSel);
+
+    return tr;
+  }
+
+  // ---------- tier builder ----------
+  function rebuildTiers(prices, type, tierSel) {
+    const current = tierSel.value || "";
+    tierSel.innerHTML = `<option value="">—</option>`;
+
+    const bucket = (prices && prices[type]) ? prices[type] : null;
+    if (!bucket || typeof bucket !== "object") return;
+
+    // keep a consistent order like your pricing tiers
+    const order = ["S12","S100","S500","1K","3K","5K","10K"];
+    order.forEach(k => {
+      const v = bucket[k];
+      const opt = document.createElement("option");
+      opt.value = k;
+      if (v === null || v === undefined || Number.isNaN(Number(v))) {
+        opt.textContent = `${k} (—)`;
+      } else {
+        opt.textContent = `${k} (${fmtMoney(v)})`;
+      }
+      tierSel.appendChild(opt);
+    });
+
+    // restore selection if still exists
+    if ([...tierSel.options].some(o => o.value === current)) tierSel.value = current;
+  }
+
+  // ---------- calculations ----------
+  function recalcLine(prices, type, tier, qty, unitPriceEl, lineTotalEl) {
+    const q = safeInt(qty, 0);
+
+    const bucket = (prices && prices[type]) ? prices[type] : null;
+    const unit = (bucket && tier) ? bucket[tier] : null;
+
+    if (unit === null || unit === undefined || tier === "" || Number.isNaN(Number(unit))) {
+      unitPriceEl.textContent = "—";
+      lineTotalEl.textContent = "—";
+      return null;
+    }
+
+    const u = Number(unit);
+    const total = u * q;
+
+    unitPriceEl.textContent = fmtMoney(u);
+    lineTotalEl.textContent = fmtMoney(total);
+    return total;
+  }
+
+  function recalcGrand() {
+    const rows = [...body.querySelectorAll("tr")];
+    let grand = 0;
+    let hasMissing = false;
+
+    rows.forEach(tr => {
+      const uid = tr.dataset.uid || "";
+      const type = tr.querySelector(".typeSel").value;
+      const tier = tr.querySelector(".tierSel").value;
+      const qty = tr.querySelector(".qtyInput").value;
+
+      const unitText = tr.querySelector(".unitPrice").textContent;
+      const totalText = tr.querySelector(".lineTotal").textContent;
+
+      if (!uid || unitText === "—" || totalText === "—") {
+        // Missing product or missing price
+        if (safeInt(qty, 0) > 0) hasMissing = true;
         return;
       }
 
-      elWarn.style.display = "none";
-      const unitNum = Number(unit);
-      const total = unitNum * qty;
+      const t = Number(totalText);
+      if (Number.isFinite(t)) grand += t;
+    });
 
-      elUnit.textContent = fmtMoney(unitNum);
-      elTotal.textContent = fmtMoney(total);
-    }
+    grandTotalEl.textContent = fmtMoney(grand);
+    warnBox.style.display = hasMissing ? "block" : "none";
+  }
 
-    rebuildTierOptions();
-    recalc();
+  // ---------- XSS-safe small helper ----------
+  function escapeHtml(s) {
+    return String(s ?? "")
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;")
+      .replaceAll("'","&#39;");
+  }
 
-    elType.addEventListener("change", () => { rebuildTierOptions(); recalc(); });
-    elTier.addEventListener("change", recalc);
-    elQty.addEventListener("input", recalc);
-  </script>
-{% else %}
-  <div class="card">
-    <div class="muted">Enter a UID/MSSID above and click <strong>Load</strong> to calculate totals.</div>
-  </div>
-{% endif %}
+  // ---------- init ----------
+  function addLine() {
+    const tr = makeLineRow();
+    body.appendChild(tr);
+    recalcGrand();
+  }
 
+  btnAddLine.addEventListener("click", addLine);
+
+  btnClear.addEventListener("click", () => {
+    body.innerHTML = "";
+    pricingCache.clear();
+    grandTotalEl.textContent = "—";
+    warnBox.style.display = "none";
+    addLine();
+  });
+
+  // Start with 1 line
+  addLine();
+})();
+</script>
 {% endblock %}
