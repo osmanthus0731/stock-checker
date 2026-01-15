@@ -4,3 +4,7 @@
 #python tools\import_pricing_from_access.py
 
 #when run command do not add # into the command
+
+
+
+#this is for if update code and to upload to github - git add . then git commit -m "comment" , git push
