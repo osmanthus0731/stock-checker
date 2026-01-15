@@ -3,7 +3,7 @@ from flask import (
     Flask, render_template, render_template_string,
     request, redirect, url_for, session, flash, send_file, jsonify
 )
-from pymongo import MongoClient
+from pymongo import MongoClient, ASCENDING
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 from dotenv import load_dotenv
@@ -155,11 +155,19 @@ def _normalize_locations_from_legacy_fields(p: dict):
     return legacy_loc or None
 
 def _normalize_mongo_product(p: dict) -> dict:
+    """
+    Normalize product docs from Mongo into a consistent schema for templates.
+
+    ✅ Adds vendor_cd support:
+      - DB field: vendor_cd (from Access ITMMST Vendor_cd)
+      - Safe fallbacks in case of older casing / older documents.
+    """
     if not p:
         return {
             "uid": "",
             "name": "",
             "readable_id": "",
+            "vendor_cd": "",
             "category": "Uncategorized",
             "pict": None,
             "stock": 0,
@@ -172,6 +180,13 @@ def _normalize_mongo_product(p: dict) -> dict:
         "uid": p.get("uid", "") or p.get("Part_id", "") or "",
         "name": p.get("name", "") or p.get("Desc", "") or "",
         "readable_id": p.get("readable_id", "") or p.get("Mssid", "") or "",
+        "vendor_cd": (
+            p.get("vendor_cd", "")
+            or p.get("Vendor_cd", "")
+            or p.get("vendorcd", "")
+            or p.get("VENDOR_CD", "")
+            or ""
+        ),
         "category": p.get("category", "Uncategorized") or "Uncategorized",
         "pict": p.get("pict", None),
         "stock": p.get("stock"),
@@ -575,6 +590,9 @@ def _filter_sort_paginate(products_all):
     if location_q:
         products_all = [p for p in products_all if _matches_location(p, location_q)]
 
+    # ✅ stable sort: name asc (dashboard list)
+    products_all = sorted(products_all, key=lambda p: (p.get("name") or "").lower())
+
     page = request.args.get("page", 1, type=int)
     total_items = len(products_all)
     total_pages = max(1, (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
@@ -657,16 +675,19 @@ def api_products_suggest():
 
     rx = re.compile(re.escape(q), re.IGNORECASE)
 
+    # ✅ include vendor_cd in search + output (so autocomplete can find by vendor id too)
     cursor = products_col.find(
         {"$or": [
             {"uid": rx},
             {"name": rx},
             {"readable_id": rx},
+            {"vendor_cd": rx},
             {"Part_id": rx},
             {"Desc": rx},
             {"Mssid": rx},
+            {"Vendor_cd": rx},
         ]},
-        {"_id": 0, "uid": 1, "name": 1, "readable_id": 1, "Part_id": 1, "Desc": 1, "Mssid": 1}
+        {"_id": 0, "uid": 1, "name": 1, "readable_id": 1, "vendor_cd": 1, "Part_id": 1, "Desc": 1, "Mssid": 1, "Vendor_cd": 1}
     ).limit(20)
 
     out = []
@@ -674,8 +695,9 @@ def api_products_suggest():
         uid = d.get("uid") or d.get("Part_id") or ""
         name = d.get("name") or d.get("Desc") or ""
         rid = d.get("readable_id") or d.get("Mssid") or ""
+        vcd = d.get("vendor_cd") or d.get("Vendor_cd") or ""
         if uid or name:
-            out.append({"uid": uid, "name": name, "readable_id": rid})
+            out.append({"uid": uid, "name": name, "readable_id": rid, "vendor_cd": vcd})
     return jsonify(out)
 
 @app.route("/api/pricing/<uid>")
@@ -691,11 +713,11 @@ PRESENCE_TTL_SECONDS = 90  # online if pinged within last 90s
 
 def _ensure_presence_indexes():
     try:
-        presence.create_index("username", unique=True)
+        presence.create_index([("username", ASCENDING)], unique=True)
     except Exception:
         pass
     try:
-        presence.create_index("last_seen_at")
+        presence.create_index([("last_seen_at", ASCENDING)])
     except Exception:
         pass
 
@@ -710,11 +732,15 @@ def api_presence_ping():
     if not username:
         return jsonify({"ok": False}), 401
 
-    presence.update_one(
-        {"username": username},
-        {"$set": {"username": username, "role": role, "last_seen_at": now}},
-        upsert=True
-    )
+    try:
+        presence.update_one(
+            {"username": username},
+            {"$set": {"username": username, "role": role, "last_seen_at": now}},
+            upsert=True
+        )
+    except Exception as e:
+        app.logger.exception("Presence ping failed: %s", e)
+        return jsonify({"ok": False}), 500
 
     # optional: also write last_seen in users collection (nice for auditing)
     try:
@@ -738,7 +764,7 @@ def api_presence_status():
         if not u:
             continue
         last_map[u] = int(d.get("last_seen_at") or 0)
-        role_map[u] = d.get("role") or ""
+        role_map[u] = (d.get("role") or "").strip()
 
     all_users = list(users.find({}, {"_id": 0, "username": 1, "role": 1}).sort("username", 1))
 
@@ -844,6 +870,12 @@ def _sort_rows(rows, sort_by: str):
     if sort_by == "uid_desc":
         return sorted(rows, key=lambda p: (p.get("uid") or "").lower(), reverse=True)
 
+    # ✅ vendor id sorting (optional but useful)
+    if sort_by == "vendor_asc":
+        return sorted(rows, key=lambda p: (p.get("vendor_cd") or "").lower())
+    if sort_by == "vendor_desc":
+        return sorted(rows, key=lambda p: (p.get("vendor_cd") or "").lower(), reverse=True)
+
     if sort_by == "volume_asc":
         return sorted(rows, key=lambda p: (_safe_int(p.get("volume_ml"), 10**9), (p.get("name") or "").lower()))
     if sort_by == "volume_desc":
@@ -896,16 +928,18 @@ def _render_search(role):
     if request.method == "POST" or q_get or selected_cat != "All" or selected_vol or selected_location:
         rows = _all_products()
 
+        # ✅ multi-keyword search includes vendor_cd too
         if q:
             keys = q.split()
-            rows = [
-                p for p in rows
-                if all(k in " ".join([
+            def hay(p):
+                return " ".join([
                     p.get("uid", ""),
                     p.get("name", ""),
                     p.get("readable_id", ""),
-                ]).lower() for k in keys)
-            ]
+                    p.get("vendor_cd", ""),
+                ]).lower()
+
+            rows = [p for p in rows if all(k in hay(p) for k in keys)]
 
         if selected_cat != "All":
             rows = [p for p in rows if (p.get("category") or "Uncategorized") == selected_cat]

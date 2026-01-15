@@ -6,6 +6,7 @@
 # ✅ Normalizes Access column names using strip().lower() to avoid ODBC weirdness
 # ✅ Stores Mongo field: "locations" as a list of {area, quantity}
 # ✅ Sets "stock" from Access total if available; otherwise sums location quantities
+# ✅ NEW: stores Vendor ID as "vendor_cd" (from ITMMST vendor_cd field)
 # ✅ Optional debug: set IMPORT_DEBUG=1 and optionally IMPORT_DEBUG_UID=<uid>
 
 import os
@@ -103,6 +104,15 @@ def run():
     NAME_KEYS = ("desc", "description", "name")
     MSSID_KEYS = ("mssid", "readable_id", "readable id", "mss id")
 
+    # ✅ Vendor ID candidates (normalized)
+    # Put a few common variants so it works even if Access column is weird.
+    VENDOR_KEYS = (
+        "vendor_cd", "vendorcd", "vendor cd",
+        "vend_cd", "vendcd", "vend cd",
+        "vendor_id", "vendorid", "vendor id",
+        "supplier_cd", "suppliercd", "supplier cd",
+    )
+
     # Category candidates (adjust anytime)
     CATEGORY_KEYS = ("cat", "category", "prodgroup", "group", "type")
 
@@ -113,7 +123,6 @@ def run():
     # 1) Single location field (ITMMST often uses Loc_Film_box)
     SINGLE_LOC_KEYS = (
         "loc_film_box",
-        "loc_filmbox",
         "loc_filmbox",
         "loc_film box",
     )
@@ -150,6 +159,10 @@ def run():
 
         name = (g(rec, *NAME_KEYS) or "").strip()
         mssid = (g(rec, *MSSID_KEYS) or "").strip()
+
+        # ✅ vendor cd
+        vendor_cd = (g(rec, *VENDOR_KEYS) or "").strip()
+
         cat = (g(rec, *CATEGORY_KEYS) or "").strip() or "Uncategorized"
         pict = to_int(g(rec, "pict"), default=None)
 
@@ -185,6 +198,7 @@ def run():
         if DEBUG:
             print("\n--- DEBUG ROW ---")
             print("uid:", uid)
+            print("vendor_cd:", vendor_cd)
             print("single_loc:", single_loc)
             print("loc_a:", g(rec, "loc_a"), "stocka:", g(rec, "stocka"))
             print("loc_b:", g(rec, "loc_b"), "stockb:", g(rec, "stockb"))
@@ -195,6 +209,7 @@ def run():
             "uid": uid,
             "name": name,
             "readable_id": mssid,
+            "vendor_cd": vendor_cd,          # ✅ NEW FIELD SAVED TO MONGO
             "category": cat,
             "pict": pict,
             "locations": locations,          # ✅ app.py + templates read this
@@ -208,7 +223,6 @@ def run():
         upserts += 1
 
         if DEBUG_UID:
-            # If debugging one UID, stop after importing it
             break
 
     cn.close()
