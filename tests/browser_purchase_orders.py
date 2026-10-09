@@ -15,7 +15,7 @@ os.environ['BOOTSTRAP_USERS'] = '0'
 with patch('pymongo.MongoClient', return_value=mongomock.MongoClient()):
     import app as module
 
-module.app.config.update(TESTING=True, SECRET_KEY='browser-test-secret')
+module.app.config.update(TESTING=True, SECRET_KEY='browser-test-secret', INVENTORY_PLATFORM_ENABLED=False)
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 module.products_col.insert_one({'uid':'PE1L104-313-UK','name':'PE Container (Phrm/313/Round/UK) 1kg W/Cap & Insert','readable_id':'313','size':'X','material':'PE','stock':500})
 module.pricing_col.insert_many([

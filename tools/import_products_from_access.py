@@ -1,12 +1,12 @@
 # tools/import_products_from_access.py
-# ✅ Imports products from Access (ITMMST) into MongoDB (upsert by uid)
-# ✅ Supports BOTH location schemas:
+#  Imports products from Access (ITMMST) into MongoDB (upsert by uid)
+#  Supports BOTH location schemas:
 #    1) Single-location column: Loc_Film_box (+ qty from Stock / StockA / Total...)
 #    2) Multi-location columns: Loc_A/StockA and Loc_B/StockB (extendable)
-# ✅ Normalizes Access column names using strip().lower() to avoid ODBC weirdness
-# ✅ Stores Mongo field: "locations" as a list of {area, quantity}
-# ✅ Sets "stock" from Access total if available; otherwise sums location quantities
-# ✅ Optional debug: set IMPORT_DEBUG=1 and optionally IMPORT_DEBUG_UID=<uid>
+#  Normalizes Access column names using strip().lower() to avoid ODBC weirdness
+#  Stores Mongo field: "locations" as a list of {area, quantity}
+#  Sets "stock" from Access total if available; otherwise sums location quantities
+#  Optional debug: set IMPORT_DEBUG=1 and optionally IMPORT_DEBUG_UID=<uid>
 
 import os
 import re
@@ -109,26 +109,11 @@ def run():
     # Total stock candidates (if present in table)
     TOTAL_KEYS = ("stock_office", "stock", "total", "qtytotal", "qty_total", "stock_office")
 
-    # ✅ Location schema candidates:
-    # 1) Single location field (ITMMST often uses Loc_Film_box)
-    SINGLE_LOC_KEYS = (
-        "loc_film_box",
-        "loc_filmbox",
-        "loc_filmbox",
-        "loc_film box",
-    )
-
-    # Quantity candidates to use with SINGLE_LOC_KEYS (pick best available)
-    SINGLE_LOC_QTY_KEYS = (
-        "stocka", "stock", "total", "qtytotal", "qty_total", "stock_office"
-    )
-
-    # 2) Multi-location columns
+    # Location A is Loc_film_box / StockA; Location B is Loc_wh / StockB.
+    # Keep legacy alternatives for older copies, but never discard B merely because A exists.
     MULTI_LOCATION_PAIRS = [
-        (("loc_a", "loca"), ("stocka", "qtya")),
-        (("loc_b", "locb"), ("stockb", "qtyb")),
-        # extend if needed:
-        # (("loc_c", "locc"), ("stockc", "qtyc")),
+        (("loc_film_box", "loc_filmbox", "loc_film box", "loc_a", "loca"), ("stocka", "qtya"), "A"),
+        (("loc_wh", "locwh", "loc_wharehouse", "loc_b", "locb"), ("stockb", "qtyb"), "B"),
     ]
 
     upserts = 0
@@ -156,18 +141,13 @@ def run():
         # ---------------- Build locations (supports both schemas) ----------------
         locations = []
 
-        # Try SINGLE location schema first: Loc_Film_box
-        single_loc = (g(rec, *SINGLE_LOC_KEYS) or "").strip()
-        if single_loc:
-            single_qty = to_int(g(rec, *SINGLE_LOC_QTY_KEYS), default=0)
-            locations.append({"area": single_loc, "quantity": single_qty})
-        else:
-            # Fallback to MULTI location schema: Loc_A/StockA, Loc_B/StockB
-            for loc_keys, qty_keys in MULTI_LOCATION_PAIRS:
-                loc_val = (g(rec, *loc_keys) or "").strip()
-                qty_val = to_int(g(rec, *qty_keys), default=0)
-                if loc_val:
-                    locations.append({"area": loc_val, "quantity": qty_val})
+        slots = {}
+        for loc_keys, qty_keys, slot in MULTI_LOCATION_PAIRS:
+            loc_val = str(g(rec, *loc_keys) or "").strip()
+            qty_val = to_int(g(rec, *qty_keys), default=0)
+            slots[slot] = {"location": loc_val, "quantity": qty_val}
+            if loc_val:
+                locations.append({"slot": slot, "area": loc_val, "quantity": qty_val})
 
         # ---------------- Total stock ----------------
         total_from_access = None
@@ -177,15 +157,17 @@ def run():
                 total_from_access = to_int(v, default=None)
                 break
 
-        sum_locations = sum((x.get("quantity") or 0) for x in locations)
+        sum_locations = slots["A"]["quantity"] + slots["B"]["quantity"]
         total_stock = total_from_access if total_from_access is not None else sum_locations
+        total_consistent = total_stock == sum_locations
 
         vml = vol_ml(name) or vol_ml(mssid)
 
         if DEBUG:
             print("\n--- DEBUG ROW ---")
             print("uid:", uid)
-            print("single_loc:", single_loc)
+            print("location_a:", slots["A"])
+            print("location_b:", slots["B"])
             print("loc_a:", g(rec, "loc_a"), "stocka:", g(rec, "stocka"))
             print("loc_b:", g(rec, "loc_b"), "stockb:", g(rec, "stockb"))
             print("locations built:", locations)
@@ -197,8 +179,20 @@ def run():
             "readable_id": mssid,
             "category": cat,
             "pict": pict,
-            "locations": locations,          # ✅ app.py + templates read this
+            "locations": locations,          # read from here
+            "location_a": slots["A"]["location"],
+            "stock_a": slots["A"]["quantity"],
+            "location_b": slots["B"]["location"],
+            "stock_b": slots["B"]["quantity"],
             "stock": total_stock,
+            "stock_total_consistent": total_consistent,
+            "access_confirmed": ({
+                "a": slots["A"]["quantity"], "b": slots["B"]["quantity"], "total": total_stock,
+                "location_a": slots["A"]["location"], "location_b": slots["B"]["location"],
+            } if total_consistent else None),
+            "stock_revision": 0,
+            "sync_status": "synced" if total_consistent else "conflict",
+            "supplier": str(g(rec, "supplr", "supplier") or "").strip(),
             "volume_ml": vml,
             "_source": "access",
             "_imported_at": int(time.time()),

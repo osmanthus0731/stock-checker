@@ -61,7 +61,10 @@
     {% endif %}
   </div>
 
+  {% if platform_enabled %}<div class="locs" id="recent-stock-movements" data-uid="{{ product.uid }}"><h3>Recent stock movements</h3><p class="muted">Loading movement history…</p></div>{% endif %}
+
   <div class="actions">
+    {% if 'stock.edit' in platform_permissions %}<button class="btn btn-primary" type="button" data-stock-edit="{{ product.uid }}">Edit Stock</button>{% endif %}
     <a class="btn btn-primary" href="{{ url_for('view_pricing', uid=product.uid) }}">View Pricing</a>
     {% if role == 'admin' %}
       <a class="btn btn-ghost" href="{{ url_for('search_admin', q=product.uid) }}">Open in Search</a>

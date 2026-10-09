@@ -119,7 +119,7 @@
             <th>Locations</th>
             <th style="width:110px;">Stock</th>
             <th style="width:140px;">QR</th>
-            <th style="width:120px;">Pricing</th>
+            <th style="width:180px;">Actions</th>
           </tr>
           </thead>
 
@@ -154,7 +154,8 @@
               </td>
 
               <td>
-                <a class="btn" href="{{ url_for('view_pricing', uid=p.uid) }}">View</a>
+                <a class="btn" href="{{ url_for('view_pricing', uid=p.uid) }}">Pricing</a>
+                {% if 'stock.edit' in platform_permissions %}<button class="btn" type="button" data-stock-edit="{{ p.uid }}">Edit Stock</button>{% endif %}
               </td>
             </tr>
           {% endfor %}

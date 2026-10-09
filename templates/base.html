@@ -200,7 +200,7 @@
               <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>
             </svg>
           </span>
-          <span class="sb-label">Search</span>
+          <span class="sb-label">Inventory</span>
         </a>
 
         <a class="sb-item {% if request.endpoint=='calculator_page' %}active{% endif %}"
@@ -215,7 +215,7 @@
           <span class="sb-label">Calculator</span>
         </a>
 
-        <a class="sb-item {% if request.endpoint=='create_user' %}active{% endif %}"
+        {% if not platform_enabled %}<a class="sb-item {% if request.endpoint=='create_user' %}active{% endif %}"
            href="{{ url_for('create_user') }}" data-tip="New account">
           <span class="sb-ico">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -224,7 +224,7 @@
             </svg>
           </span>
           <span class="sb-label">New account</span>
-        </a>
+        </a>{% endif %}
 
       {% elif session.get('role') == 'worker' %}
         <a class="sb-item {% if request.endpoint=='index' %}active{% endif %}"
@@ -244,7 +244,7 @@
               <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>
             </svg>
           </span>
-          <span class="sb-label">Search</span>
+          <span class="sb-label">Inventory</span>
         </a>
 
         <a class="sb-item {% if request.endpoint=='calculator_page' %}active{% endif %}"
@@ -265,6 +265,14 @@
           <span class="sb-ico" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h12v18H6zM9 7h6M9 11h6M9 15h4"/></svg></span>
           <span class="sb-label">Purchase Orders</span>
         </a>
+        {% if platform_enabled %}
+        <a class="sb-item {% if request.blueprint=='platform' and request.view_args and request.view_args.get('section')=='history' %}active{% endif %}" href="{{ url_for('platform.page',section='history') }}" data-tip="Stock History"><span class="sb-ico">↺</span><span class="sb-label">Stock History</span></a>
+        <a class="sb-item {% if request.blueprint=='platform' and request.view_args and request.view_args.get('section')=='analytics' %}active{% endif %}" href="{{ url_for('platform.page',section='analytics') }}" data-tip="Inventory Analytics"><span class="sb-ico">▥</span><span class="sb-label">Inventory Analytics</span></a>
+        <a class="sb-item {% if request.blueprint=='platform' and request.view_args and request.view_args.get('section')=='forecasting' %}active{% endif %}" href="{{ url_for('platform.page',section='forecasting') }}" data-tip="Stock Forecasting"><span class="sb-ico">⌁</span><span class="sb-label">Stock Forecasting</span></a>
+        {% if 'sync.manage' in platform_permissions %}<a class="sb-item {% if request.blueprint=='platform' and request.view_args and request.view_args.get('section')=='sync' %}active{% endif %}" href="{{ url_for('platform.page',section='sync') }}" data-tip="Inventory Sync"><span class="sb-ico">⇄</span><span class="sb-label">Inventory Sync</span></a>{% endif %}
+        {% if 'users.manage' in platform_permissions %}<a class="sb-item {% if request.blueprint=='platform' and request.view_args and request.view_args.get('section')=='users' %}active{% endif %}" href="{{ url_for('platform.page',section='users') }}" data-tip="Users"><span class="sb-ico">♙</span><span class="sb-label">Users</span></a>{% endif %}
+        {% if 'settings.manage' in platform_permissions %}<a class="sb-item {% if request.blueprint=='platform' and request.view_args and request.view_args.get('section')=='settings' %}active{% endif %}" href="{{ url_for('platform.page',section='settings') }}" data-tip="Settings"><span class="sb-ico">⚙</span><span class="sb-label">Settings</span></a>{% endif %}
+        {% endif %}
       {% endif %}
     </div>
 
@@ -428,5 +436,10 @@
   </script>
 
   {% block scripts %}{% endblock %}
+  {% if platform_enabled and session.get('username') %}
+  <link rel="stylesheet" href="{{ url_for('static',filename='platform.css') }}">
+  <dialog id="stock-dialog" data-csrf="{{ platform_csrf }}"><form class="platform-form" id="stock-form"><div class="platform-heading"><div><h2>Edit Stock</h2><p id="stock-product"></p></div><button type="button" data-dialog-close aria-label="Close">✕</button></div><div id="stock-message" role="status"></div><dl id="stock-meta"></dl><input type="hidden" name="uid"><input type="hidden" name="revision"><input type="hidden" name="event_id"><fieldset><legend>Entry mode</legend><label><input type="radio" name="mode" value="set" checked> Enter new quantities</label><label><input type="radio" name="mode" value="adjust"> Enter adjustments (+ / −)</label></fieldset><div class="platform-grid"><label><span id="stock-a-label">Location A</span><input type="number" name="a" required></label><label><span id="stock-b-label">Location B</span><input type="number" name="b" required></label></div><label>Reason<select name="reason" required><option value="">Select reason</option><option value="received">Stock received</option><option value="issued">Stock sold / issued</option><option value="damaged">Damaged stock</option><option value="correction">Stock correction</option><option value="transfer">Stock transfer</option><option value="return">Customer return</option><option value="other">Other</option></select></label><label>Reference number<input name="reference" maxlength="120"></label><label>Note<textarea name="note" maxlength="1000"></textarea></label><section class="card" id="stock-review"><strong>Review</strong><p>Load a product to review before and after values.</p></section><button class="btn" id="stock-save" type="submit">Confirm stock update</button><p class="muted">Cloud save queues Access sync. “Synced” appears only after verified Access acknowledgement.</p></form></dialog>
+  <script src="{{ url_for('static',filename='stock_editor.js') }}" defer></script>
+  {% endif %}
 </body>
 </html>

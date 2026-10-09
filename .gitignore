@@ -13,3 +13,6 @@ static/qr_codes/*.png
 .pytest_cache/
 reference-po.png
 test-artifacts/
+backups/
+sync-service.env
+sync-logs/

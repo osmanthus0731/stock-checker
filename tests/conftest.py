@@ -14,7 +14,7 @@ def application(monkeypatch):
     with patch("pymongo.MongoClient", return_value=fake):
         sys.modules.pop("app", None)
         module = importlib.import_module("app")
-    module.app.config.update(TESTING=True, SECRET_KEY="po-test-secret")
+    module.app.config.update(TESTING=True, SECRET_KEY="po-test-secret", INVENTORY_PLATFORM_ENABLED=False)
     return module
 
 

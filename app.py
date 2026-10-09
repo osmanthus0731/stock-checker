@@ -972,6 +972,8 @@ def not_found(e):
 # Purchase orders use their own Mongo collection; inventory/pricing are read-only dependencies.
 from purchase_orders import init_app as init_purchase_orders
 init_purchase_orders(app, db, products_col, pricing_col)
+from inventory_platform import init_app as init_inventory_platform
+init_inventory_platform(app, db)
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":

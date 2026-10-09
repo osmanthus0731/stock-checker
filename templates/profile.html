@@ -16,6 +16,7 @@
 
   <!-- Update basic info -->
   <form method="post" style="display:grid;gap:12px">
+    <input type="hidden" name="platform_csrf" value="{{ platform_csrf }}">
     <input type="hidden" name="action" value="update_profile">
     <h3 style="margin:6px 0 0">Details</h3>
     <div style="display:grid;gap:10px;grid-template-columns:1fr 1fr">
@@ -37,9 +38,7 @@
     </div>
   </form>
 
-  <hr style="border:none;height:1px;background:#eee">
-
-  <!-- Change password -->
+  {% if not platform_enabled %}<hr style="border:none;height:1px;background:#eee">
   <form method="post" style="display:grid;gap:12px;max-width:520px">
     <input type="hidden" name="action" value="change_password">
     <h3 style="margin:6px 0 0">Change password</h3>
@@ -59,5 +58,6 @@
       <button class="btn" type="submit">Update password</button>
     </div>
   </form>
+  {% else %}<p class="muted">This installation uses password-free account selection. Administrators manage usernames, display names, roles, and activation from Users.</p>{% endif %}
 </div>
 {% endblock %}

@@ -15,4 +15,4 @@ COPY . .
 ENV PORT=10000
 EXPOSE 10000
 
-CMD ["gunicorn", "-c", "gunicorn.conf.py", "wsgi:app"]
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "app:app"]
