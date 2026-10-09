@@ -1,0 +1,21 @@
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>UID</th><th>Product</th><th>Mssid</th><th>Locations</th><th>Stock</th><th>Pricing</th></tr></thead>
+    <tbody>
+      {% for p in products %}
+      <tr>
+        <td><a href="{{ url_for('item_detail', uid=p.uid) }}">{{ p.uid }}</a></td>
+        <td>{{ p.name }}</td><td>{{ p.readable_id }}</td>
+        <td>{% for location in p.locations %}<div>{{ location.area }}: {{ location.quantity }}</div>{% else %}—{% endfor %}</td>
+        <td>{{ p.stock }}</td><td><a href="{{ url_for('view_pricing', uid=p.uid) }}">View</a></td>
+      </tr>
+      {% else %}<tr><td colspan="6">No products found.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if total_pages > 1 %}
+<nav aria-label="Product pages" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px">
+  {% for p in pages %}<a class="btn" href="{{ url_for('index', page=p, filter_category=selected_category, volume=selected_volume, location=location) }}" {% if p == page %}aria-current="page"{% endif %}>{{ p }}</a>{% endfor %}
+  <span>Page {{ page }} of {{ total_pages }}</span>
+</nav>
+{% endif %}

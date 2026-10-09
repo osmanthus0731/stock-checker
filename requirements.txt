@@ -10,6 +10,8 @@ certifi==2024.8.30
 # QR codes
 qrcode==7.4.2
 Pillow==10.4.0
+reportlab==5.0.1
+tzdata>=2025.2
 
 # Schedulers (optional; harmless if unused)
 APScheduler==3.10.4

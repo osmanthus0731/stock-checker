@@ -9,3 +9,7 @@ __pycache__/
 instance/
 static/qr_codes/*.png
 .vercel
+.po-deps/
+.pytest_cache/
+reference-po.png
+test-artifacts/

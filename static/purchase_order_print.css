@@ -1,0 +1,15 @@
+@page{size:A4;margin:0}
+.po-print-body{margin:0;background:#e8e8eb;font-family:Arial,sans-serif}
+.po-preview{background:#e8e8eb;padding:16px;overflow:auto}
+.po-sheet{width:210mm;max-width:100%;margin:0 auto 16px;background:#fff;box-shadow:0 2px 8px #0002;aspect-ratio:595.32/841.92}
+.po-sheet svg{display:block;width:100%;height:auto}
+.po-print-controls{display:flex;gap:16px;flex-wrap:wrap;align-items:center;padding:14px;background:#fff;font-size:14px}.po-print-controls button{padding:8px 16px;cursor:pointer}
+@media print{
+ html,body{margin:0!important;padding:0!important;background:#fff!important}
+ .sidebar,.topbar,.scrim,.po-print-controls,.po-app>*:not(.po-preview),body>script{display:none!important}
+ .page,.wrap,.po-app{margin:0!important;padding:0!important;max-width:none!important;min-height:0!important}
+ .po-preview{display:block!important;overflow:visible;padding:0;background:#fff}
+ .po-sheet{width:210mm!important;max-width:none!important;height:297mm!important;margin:0!important;box-shadow:none;break-after:page;break-inside:avoid;page-break-after:always}
+ .po-sheet:last-child{break-after:auto;page-break-after:auto}
+ .po-sheet svg{width:210mm;height:297mm;print-color-adjust:exact;-webkit-print-color-adjust:exact}
+}

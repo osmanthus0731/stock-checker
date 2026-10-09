@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Purchase Orders — Mizitco{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='purchase_orders.css') }}">
+<section class="po-app" data-page="dashboard" data-csrf="{{ csrf }}">
+  <div class="po-toolbar"><div><h1>Purchase Orders</h1><p class="muted">{{ 'All purchase orders' if session.role == 'admin' else 'Your purchase orders' }}</p></div><a class="btn" href="{{ url_for('purchase_orders.new') }}">Create Purchase Order</a></div>
+  <form id="po-filters" class="card po-toolbar">
+    <label class="po-grow">Search<input name="q" placeholder="Purchase number or supplier" maxlength="160"></label>
+    <label>Status<select name="status"><option value="">All statuses</option><option value="draft">Draft</option><option value="finalised">Finalised</option><option value="cancelled">Cancelled</option></select></label>
+    <label>Order date<select name="sort"><option value="newest">Newest to oldest</option><option value="oldest">Oldest to newest</option></select></label>
+    <button class="btn">Search</button>
+  </form>
+  <p id="po-message" role="status" aria-live="polite"></p>
+  <div class="table-wrap"><table class="po-list"><thead><tr><th>Purchase number</th><th>Supplier</th><th>Date</th><th>Total</th><th>Status</th><th>Actions</th></tr></thead><tbody id="po-orders"></tbody></table></div>
+  <div class="po-toolbar po-pagination"><button class="btn po-secondary" id="po-prev">Previous</button><span id="po-page"></span><button class="btn po-secondary" id="po-next">Next</button></div>
+</section>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='purchase_orders.js') }}" defer></script>{% endblock %}

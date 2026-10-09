@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if po.number else 'Create' }} Purchase Order — Mizitco{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='purchase_orders.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='purchase_order_print.css') }}">
+<section class="po-app" data-page="editor" data-csrf="{{ csrf }}">
+  <div class="po-toolbar"><div><a href="{{ url_for('purchase_orders.dashboard') }}">← Purchase Orders</a><h1>{{ 'Edit' if po.number else 'Create' }} Purchase Order</h1></div><span class="po-badge draft">Draft</span></div>
+  <p class="muted">Save a draft, review the document, then finalise it. Finalised contents are locked.</p>
+  <p id="po-message" role="status" aria-live="polite"></p>
+  <form id="po-editor">
+    <div class="card po-fields">
+      <label class="po-wide">Supplier name<input name="supplier.name" required maxlength="160" value="{{ po.supplier.name or '' }}"></label>
+      <label class="po-wide">Supplier address / supplementary details<textarea name="supplier.details" rows="3" maxlength="600">{{ po.supplier.details or '' }}</textarea></label>
+      <label>Attn.<input name="supplier.attention" maxlength="100" value="{{ po.supplier.attention or '' }}"></label>
+      <label>Fax<input name="supplier.fax" maxlength="50" value="{{ po.supplier.fax or '' }}"></label>
+      <label>Order date<input type="date" name="date" required value="{{ po.date }}"></label>
+      <label>Delivery date<input type="date" name="delivery_date" value="{{ po.delivery_date or '' }}"></label>
+      <label>Terms<input name="terms" maxlength="100" value="{{ po.terms or '' }}"></label>
+      <label>Replacement<input name="replacement" maxlength="80" value="{{ po.replacement or '' }}"></label>
+      <label>Currency<select name="currency">{% for c in currencies %}<option {{ 'selected' if c == po.currency }}>{{ c }}</option>{% endfor %}</select></label>
+      <label>Legacy PO number (optional)<input name="legacy_number" maxlength="50" value="{{ po.legacy_number or '' }}"><small>Enter an existing system number only when known.</small></label>
+    </div>
+    <div class="po-toolbar"><h2>Items</h2><button type="button" class="btn po-secondary" id="po-add">Add manual item</button></div>
+    <div class="card"><label>Find inventory<input id="po-search" type="search" placeholder="Search by UID, name or Mssid" autocomplete="off" maxlength="120"></label><p id="po-search-status" class="muted" role="status"></p><div id="po-results" class="po-results"></div></div>
+    <div id="po-items"></div>
+    <div class="card po-toolbar">
+      <label>Discount type<select name="discount_type"><option value="amount" {{ 'selected' if po.discount_type == 'amount' }}>Amount</option><option value="percent" {{ 'selected' if po.discount_type == 'percent' }}>Percentage</option></select></label>
+      <label>Discount<input name="discount_value" inputmode="decimal" required value="{{ po.discount_value }}"></label>
+      <div class="po-totals"><div>Subtotal <output id="po-subtotal">0.00</output></div><div>Discount <output id="po-discount">0.00</output></div><strong>Total <output id="po-total">0.00</output></strong></div>
+    </div>
+    <div class="po-toolbar po-save"><button class="btn" id="po-save">Save draft</button><a href="{{ url_for('purchase_orders.dashboard') }}">Back to orders</a><span id="po-save-state" class="muted">{{ po.number or 'A local reference is assigned on save.' }}</span></div>
+  </form>
+  <div class="po-toolbar"><h2>Live A4 preview</h2><span id="po-preview-status" role="status">Complete supplier and item details to preview.</span></div>
+  <div id="po-preview" class="po-preview"></div>
+</section>
+<script id="po-data" type="application/json">{{ po|tojson }}</script>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='purchase_orders.js') }}" defer></script>{% endblock %}

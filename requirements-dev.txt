@@ -1,0 +1,5 @@
+-r requirements.txt
+pytest==9.1.1
+mongomock==4.3.0
+PyMuPDF==1.28.2
+playwright==1.63.0

@@ -969,6 +969,10 @@ def search_worker():
 def not_found(e):
     return render_template("404.html"), 404
 
+# Purchase orders use their own Mongo collection; inventory/pricing are read-only dependencies.
+from purchase_orders import init_app as init_purchase_orders
+init_purchase_orders(app, db, products_col, pricing_col)
+
 # ---------------- RUN ----------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False)

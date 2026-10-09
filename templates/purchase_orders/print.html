@@ -1,0 +1,5 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Purchase Order {{ po.legacy_number or po.number }}</title><link rel="stylesheet" href="{{ url_for('static', filename='purchase_order_print.css') }}"></head>
+<body class="po-print-body">
+{% if not request.args.get('embedded') %}<div class="po-print-controls"><button onclick="window.print()">Print A4</button><a href="{{ url_for('purchase_orders.export_pdf', number=po.number) }}">Download PDF</a><span>Choose A4, 100% scale, and disable browser headers and footers.</span></div>{% endif %}
+<main class="po-preview">{% for page in pages %}<div class="po-sheet">{{ page|safe }}</div>{% endfor %}</main>
+</body></html>

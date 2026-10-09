@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}{{ po.legacy_number or po.number }} — Purchase Order{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='purchase_orders.css') }}">
+<section class="po-app" data-page="view" data-csrf="{{ csrf }}" data-number="{{ po.number }}" data-revision="{{ po.revision }}">
+  <a href="{{ url_for('purchase_orders.dashboard') }}">← Purchase Orders</a>
+  <div class="po-toolbar"><div><h1>{{ po.legacy_number or po.number }}</h1><p>{{ po.supplier.name }} · {{ po.date }} · {{ po.currency }} {{ po.total }}</p></div><span class="po-badge {{ po.status }}">{{ po.status|capitalize }}</span></div>
+  {% if po.status != 'draft' %}<p class="muted">This document's contents are locked. Duplicate it to create a new draft.</p>{% endif %}
+  <div class="po-toolbar po-actions">
+    {% if po.status == 'draft' %}<a class="btn" href="{{ url_for('purchase_orders.edit', number=po.number) }}">Edit</a><button class="btn" data-action="finalise">Finalise</button>{% endif %}
+    <button class="btn po-secondary" data-action="duplicate">Duplicate</button>
+    <a class="btn po-secondary" href="{{ url_for('purchase_orders.print_order', number=po.number) }}" target="_blank" rel="noopener">Print</a>
+    <a class="btn po-secondary" href="{{ url_for('purchase_orders.export_pdf', number=po.number) }}">Export PDF</a>
+    {% if po.status != 'cancelled' %}<button class="btn po-danger" data-action="cancel">Cancel PO</button>{% endif %}
+  </div>
+  <p id="po-message" role="status" aria-live="polite"></p>
+  <iframe class="po-document-frame" title="Purchase order A4 document" src="{{ url_for('purchase_orders.print_order', number=po.number, embedded=1) }}"></iframe>
+  <details class="card"><summary>Document history</summary><p>Local reference: {{ po.number }}</p><ul>{% for event in po.history %}<li>{{ event.action|capitalize }} by {{ event.by }} — {{ event.at }}</li>{% endfor %}</ul></details>
+</section>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='purchase_orders.js') }}" defer></script>{% endblock %}
