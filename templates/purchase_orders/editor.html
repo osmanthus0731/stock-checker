@@ -4,8 +4,8 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='purchase_orders.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='purchase_order_print.css') }}">
 <section class="po-app" data-page="editor" data-csrf="{{ csrf }}">
-  <div class="po-toolbar"><div><a href="{{ url_for('purchase_orders.dashboard') }}">← Purchase Orders</a><h1>{{ 'Edit' if po.number else 'Create' }} Purchase Order</h1></div><span class="po-badge draft">Draft</span></div>
-  <p class="muted">Save a draft, review the document, then finalise it. Finalised contents are locked.</p>
+  <div class="po-toolbar"><div><a href="{{ url_for('purchase_orders.dashboard') }}">← Purchase Orders</a><h1>{{ 'Edit' if po.number else 'Create' }} Purchase Order</h1></div><span class="po-badge {{ po.status }}">{{ po.status|capitalize }}</span></div>
+  <p class="muted">{% if po.number %}Saving changes keeps this record's {{ po.status }} status.{% else %}Save a draft, review the document, then finalise it.{% endif %}</p>
   <p id="po-message" role="status" aria-live="polite"></p>
   <form id="po-editor">
     <div class="card po-fields">
@@ -28,7 +28,7 @@
       <label>Discount<input name="discount_value" inputmode="decimal" required value="{{ po.discount_value }}"></label>
       <div class="po-totals"><div>Subtotal <output id="po-subtotal">0.00</output></div><div>Discount <output id="po-discount">0.00</output></div><strong>Total <output id="po-total">0.00</output></strong></div>
     </div>
-    <div class="po-toolbar po-save"><button class="btn" id="po-save">Save draft</button><a href="{{ url_for('purchase_orders.dashboard') }}">Back to orders</a><span id="po-save-state" class="muted">{{ po.number or 'A local reference is assigned on save.' }}</span></div>
+    <div class="po-toolbar po-save"><button class="btn" id="po-save">{{ 'Save changes' if po.number else 'Save draft' }}</button><a href="{{ url_for('purchase_orders.dashboard') }}">Back to orders</a><span id="po-save-state" class="muted">{{ po.number or 'A local reference is assigned on save.' }}</span></div>
   </form>
   <div class="po-toolbar"><h2>Live A4 preview</h2><span id="po-preview-status" role="status">Complete supplier and item details to preview.</span></div>
   <div id="po-preview" class="po-preview"></div>

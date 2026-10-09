@@ -53,7 +53,7 @@ def test_number_collision_and_concurrent_creation(application, payload):
     assert all(number.startswith('LOCAL-PO-') for number in numbers)
 
 
-def test_workflow_snapshots_immutability_and_conflicts(client, application, payload):
+def test_workflow_snapshots_and_conflicts(client, application, payload):
     application.products_col.insert_one({'uid':'PE1L104-313-UK','name':'Original'})
     before = list(application.products_col.find())
     po = create(client, payload); path = '/purchase-orders/api/orders/' + po['number']
@@ -67,15 +67,15 @@ def test_workflow_snapshots_immutability_and_conflicts(client, application, payl
     finalised = client.post(path + '/finalise', json={'revision':2}, headers=HEADERS)
     assert finalised.status_code == 200 and finalised.json['status'] == 'finalised'
     edit['revision'] = 3
-    assert client.put(path, json=edit, headers=HEADERS).status_code == 409
-    assert client.post(path + '/finalise', json={'revision':3}, headers=HEADERS).status_code == 409
+    assert client.put(path, json=edit, headers=HEADERS).status_code == 200
+    assert client.post(path + '/finalise', json={'revision':4}, headers=HEADERS).status_code == 409
     duplicate = client.post(path + '/duplicate', json={}, headers=HEADERS).json
     assert duplicate['number'] != po['number'] and duplicate['status'] == 'draft'
     assert duplicate['items'] == po['items'] and duplicate['legacy_number'] == ''
-    cancelled = client.post(path + '/cancel', json={'revision':3}, headers=HEADERS)
+    cancelled = client.post(path + '/cancel', json={'revision':4}, headers=HEADERS)
     assert cancelled.status_code == 200 and cancelled.json['status'] == 'cancelled'
-    assert client.post(path + '/finalise', json={'revision':4}, headers=HEADERS).status_code == 409
-    assert client.post(path + '/cancel', json={'revision':4}, headers=HEADERS).status_code == 409
+    assert client.post(path + '/finalise', json={'revision':5}, headers=HEADERS).status_code == 409
+    assert client.post(path + '/cancel', json={'revision':5}, headers=HEADERS).status_code == 409
 
 
 def test_roles_and_csrf(client, application, payload):
@@ -88,6 +88,7 @@ def test_roles_and_csrf(client, application, payload):
     path = '/purchase-orders/api/orders/' + admin_po['number']
     assert client.get(path).status_code == 404
     assert client.put(path,json={**payload,'revision':1},headers=HEADERS).status_code == 404
+    assert client.delete(path,json={'revision':1},headers=HEADERS).status_code == 404
     for action in ('finalise','cancel','duplicate'):
         assert client.post(path+'/'+action,json={'revision':1},headers=HEADERS).status_code == 404
     assert client.post('/purchase-orders/api/preview',json={**payload,'number':admin_po['number']},headers=HEADERS).status_code == 404
@@ -95,6 +96,7 @@ def test_roles_and_csrf(client, application, payload):
     assert client.post('/purchase-orders/api/orders/'+worker_po['number']+'/finalise',json={'revision':1},headers=HEADERS).status_code == 200
     with client.session_transaction() as s: s.update(username='worker2')
     assert client.get('/purchase-orders/api/orders/'+worker_po['number']).status_code == 404
+    assert client.delete('/purchase-orders/api/orders/'+worker_po['number'],json={'revision':2},headers=HEADERS).status_code == 404
     with client.session_transaction() as s: s.update(role='unknown')
     assert client.get('/purchase-orders/').status_code == 403
     with client.session_transaction() as s: s.clear()
@@ -190,3 +192,46 @@ def test_oversize_rows_are_rejected_before_persistence(client, application, payl
     response = client.post('/purchase-orders/api/orders',json=payload,headers=HEADERS)
     assert response.status_code == 400 and 'too tall' in response.json['error']
     assert application.db.purchase_orders.count_documents({}) == 0
+
+
+@pytest.mark.parametrize('status', ['draft', 'finalised', 'cancelled'])
+@pytest.mark.parametrize('role', ['admin', 'worker'])
+def test_edit_and_delete_all_statuses(client, application, payload, status, role):
+    with client.session_transaction() as s: s.update(username='owner',role='worker')
+    po = create(client,payload)
+    path = '/purchase-orders/api/orders/' + po['number']
+    if status != 'draft':
+        action = 'finalise' if status == 'finalised' else 'cancel'
+        po = client.post(path+'/'+action,json={'revision':po['revision']},headers=HEADERS).json
+    with client.session_transaction() as s:
+        s.update(username='admin' if role == 'admin' else 'owner',role=role)
+    application.products_col.insert_one({'uid':'untouched','stock':123})
+    application.pricing_col.insert_one({'part_id':'untouched','S12':4})
+    inventory_before = list(application.products_col.find())
+    pricing_before = list(application.pricing_col.find())
+    assert client.get('/purchase-orders/'+po['number']+'/edit').status_code == 200
+    changed = {**payload,'revision':po['revision'],'terms':'Updated terms','status':'draft'}
+    response = client.put(path,json=changed,headers=HEADERS)
+    assert response.status_code == 200
+    edited = response.json
+    assert edited['status'] == status and edited['terms'] == 'Updated terms'
+    assert edited['number'] == po['number'] and edited['created_by'] == 'owner'
+    assert edited['history'][-1]['action'] == 'edited'
+    assert edited['revision'] == po['revision'] + 1
+    assert client.put(path,json=changed,headers=HEADERS).status_code == 409
+    preview = client.post('/purchase-orders/api/preview',json={**changed,'number':po['number']},headers=HEADERS)
+    assert preview.status_code == 200
+    assert ('CANCELLED' in ''.join(preview.json['pages'])) == (status == 'cancelled')
+    assert client.delete(path,json={'revision':po['revision']},headers=HEADERS).status_code == 409
+    assert client.delete(path,json={'revision':edited['revision']}).status_code == 400
+    assert client.delete(path,json={},headers=HEADERS).status_code == 400
+    assert client.get(path).status_code == 200
+    deleted = client.delete(path,json={'revision':edited['revision']},headers=HEADERS)
+    assert deleted.status_code == 200 and deleted.json['deleted'] is True
+    assert application.db.purchase_orders.find_one({'_id':po['number']}) is None
+    assert client.get(path).status_code == 404
+    assert client.get('/purchase-orders/api/orders').json['total'] == 0
+    for suffix in ['', '/edit', '/print', '/pdf']:
+        assert client.get('/purchase-orders/'+po['number']+suffix).status_code == 404
+    assert list(application.products_col.find()) == inventory_before
+    assert list(application.pricing_col.find()) == pricing_before

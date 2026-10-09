@@ -32,11 +32,11 @@ Supported currencies default to MYR, USD, SGD, EUR, GBP, CNY, JPY, THB and AUD a
 4. Review the live A4 preview and save the draft. Reopen or edit it from the dashboard.
 5. Finalise the draft after review. Print or export PDF from the document view.
 
-Admins can access all POs. Workers can create and access only their own POs, including editing, finalising, cancelling, duplicating and exporting. Unknown roles are denied. Ownership restrictions cover list, view, edit, preview, print, PDF and every mutation endpoint. POST/PUT requests require the session-specific `X-CSRF-Token` supplied by the module's pages. Existing unrelated forms and routes are unchanged.
+Admins can access all POs. Workers can create and access only their own POs, including editing, deleting, finalising, cancelling, duplicating and exporting. Unknown roles are denied. Ownership restrictions cover list, view, edit, preview, print, PDF and every mutation endpoint. POST/PUT/DELETE requests require the session-specific `X-CSRF-Token` supplied by the module's pages. Existing unrelated forms and routes are unchanged.
 
-Draft contents are editable. Finalised contents are immutable. A draft or finalised PO can be cancelled; cancellation is irreversible and retains all contents. Cancelled documents cannot be edited or finalised. Duplicating any accessible PO creates a new draft with a new reference and cleared legacy number. Copies preserve the source dates, delivery date, prices and snapshot details for the user to review.
+Draft, finalised and cancelled records can be edited from the dashboard or document view. Saving edits keeps the existing status and reference, recalculates totals, and records the edit in history. A draft or finalised PO can be cancelled; cancellation is irreversible and retains all contents. Cancelled documents cannot be finalised. Duplicating any accessible PO creates a new draft with a new reference and cleared legacy number. Copies preserve the source dates, delivery date, prices and snapshot details for the user to review.
 
-Every save/transition includes a revision. An atomic MongoDB comparison on revision, ownership and status rejects stale edits with HTTP 409. Each record has creator/updater timestamps, status timestamps, schema/layout versions and an event history. There is no PO delete operation.
+Every save, transition and deletion includes a revision. Atomic MongoDB comparisons on revision and ownership reject stale actions with HTTP 409; transitions also check the current status. Each record has creator/updater timestamps, status timestamps, schema/layout versions and an event history. Delete is available for all three statuses from the dashboard and document view, requires confirmation in the UI, and permanently removes the PO and its history. Deletion affects only the selected PO, never inventory or pricing records.
 
 ## Field mapping and pricing
 
@@ -82,9 +82,9 @@ All paths below start with `/purchase-orders`:
 | GET | `/`, `/new`, `/<number>`, `/<number>/edit` | Dashboard/editor/detail |
 | GET | `/<number>/print`, `/<number>/pdf` | A4 HTML print / downloadable PDF |
 | GET, POST | `/api/orders` | Filtered/paginated list / create draft |
-| GET, PUT | `/api/orders/<number>` | Read snapshot / update draft |
+| GET, PUT, DELETE | `/api/orders/<number>` | Read snapshot / edit any status / permanently delete |
 | POST | `/api/orders/<number>/duplicate` | New draft copy |
-| POST | `/api/orders/<number>/finalise` | Lock draft contents |
+| POST | `/api/orders/<number>/finalise` | Mark draft as finalised |
 | POST | `/api/orders/<number>/cancel` | Cancel draft/finalised PO |
 | POST | `/api/preview` | Validate and render unsaved A4 pages |
 | GET | `/api/products?q=...` | Read-only inventory search |
@@ -102,7 +102,7 @@ python tests/browser_purchase_orders.py
 
 The browser check uses installed Microsoft Edge in headless mode. Tests patch MongoClient with mongomock before importing the app, and never contact live MongoDB or Access. The browser test starts an ephemeral local HTTP server and closes it afterward.
 
-Verified on Windows/Python 3.13: backend tests, worker/admin ownership checks, amount/discount validation, collision retries, concurrent creation, revision conflicts, immutable statuses, inventory/snapshot independence, P-only pricing, search/sort, A4 multipage output, escaped document text, old dashboard/search routes, and the complete desktop/mobile browser workflow. The browser check also compares PDF/page count against browser print output and checks for JavaScript errors. Test results are not a live database deployment check.
+Verified on Windows/Python 3.13: backend tests, worker/admin ownership checks, amount/discount validation, collision retries, concurrent creation, revision conflicts, editing/deleting all statuses, inventory/snapshot independence, P-only pricing, search/sort, A4 multipage output, escaped document text, old dashboard/search routes, and the complete desktop/mobile browser workflow. The browser check also compares PDF/page count against browser print output, exercises editing cancelled records and deleting from the dashboard/detail view, and checks for JavaScript errors. Test results are not a live database deployment check.
 
 An existing missing worker-dashboard include was restored as `templates/parts/product_table.html`. The worker menu's CSS class was scoped to prevent it overriding the shared black sidebar. These are small compatibility repairs; no inventory business logic was changed.
 

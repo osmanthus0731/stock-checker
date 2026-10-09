@@ -39,8 +39,12 @@
   }
   function link(text, path) { const a = document.createElement('a'); a.textContent = text; a.href = base + path; return a; }
   async function action(number, revision, name) {
-    const prompts = {finalise: 'Finalise this PO? Its contents will become immutable.', cancel: 'Cancel this purchase order? Cancellation cannot be undone.', duplicate: 'Create a new draft copy of this purchase order?'};
+    const prompts = {finalise: 'Mark this purchase order as finalised?', cancel: 'Cancel this purchase order? Cancellation cannot be undone.', duplicate: 'Create a new draft copy of this purchase order?', delete: 'Permanently delete this purchase order and its history? This cannot be undone.'};
     if (!confirm(prompts[name])) return;
+    if (name === 'delete') {
+      await api(`/api/orders/${encodeURIComponent(number)}`, {method:'DELETE', body:JSON.stringify({revision})});
+      return true;
+    }
     const data = await api(`/api/orders/${encodeURIComponent(number)}/${name}`, {method:'POST', body:JSON.stringify({revision})});
     window.location.assign(base + '/' + encodeURIComponent(data.number));
   }
@@ -49,13 +53,16 @@
       const button = event.target.closest('[data-action]');
       if (!button) return;
       button.disabled = true;
-      try { await action(root.dataset.number, Number(root.dataset.revision), button.dataset.action); }
+      try {
+        const deleted = await action(root.dataset.number, Number(root.dataset.revision), button.dataset.action);
+        if (deleted) window.location.assign(base + '/?deleted=1');
+      }
       catch (error) { notify(error.message, true); }
       finally { button.disabled = false; }
     });
   }
   if (root.dataset.page === 'dashboard') {
-    let page = 1, generation = 0;
+    let page = 1, generation = 0, deletedNotice = new URLSearchParams(location.search).get('deleted') === '1';
     async function load() {
       const current = ++generation;
       notify('Loading purchase orders…');
@@ -63,6 +70,7 @@
       try {
         const data = await api('/api/orders?' + params);
         if (current !== generation) return;
+        if (!data.orders.length && page > 1) { page--; return load(); }
         const body = $('#po-orders'); body.replaceChildren();
         for (const order of data.orders) {
           const tr = document.createElement('tr');
@@ -72,12 +80,20 @@
           const badge = document.createElement('span'); badge.className = 'po-badge ' + order.status; badge.textContent = order.status; cell(badge);
           const actions = document.createElement('div'); actions.className = 'po-row-actions';
           actions.append(link('View', path));
-          if (order.status === 'draft') actions.append(link('Edit', path + '/edit'));
+          actions.append(link('Edit', path + '/edit'));
           const duplicate = document.createElement('button'); duplicate.textContent = 'Duplicate';
           duplicate.onclick = async () => { duplicate.disabled = true; try { await action(order.number, order.revision, 'duplicate'); } catch(error) { notify(error.message, true); } finally { duplicate.disabled = false; } };
-          actions.append(duplicate, link('Print', path + '/print'), link('PDF', path + '/pdf')); cell(actions); body.append(tr);
+          const remove = document.createElement('button'); remove.textContent = 'Delete'; remove.style.color = '#b42318';
+          remove.onclick = async () => {
+            remove.disabled = true;
+            try { if (await action(order.number, order.revision, 'delete')) { deletedNotice = true; await load(); } }
+            catch(error) { notify(error.message, true); }
+            finally { remove.disabled = false; }
+          };
+          actions.append(duplicate, link('Print', path + '/print'), link('PDF', path + '/pdf'), remove); cell(actions); body.append(tr);
         }
-        notify(data.total ? '' : 'No purchase orders found. Create your first PO or adjust the filters.');
+        notify((deletedNotice ? 'Purchase order deleted. ' : '') + (data.total ? '' : 'No purchase orders found. Create your first PO or adjust the filters.'));
+        deletedNotice = false;
         $('#po-page').textContent = `Page ${page} · ${data.total} orders`;
         $('#po-prev').disabled = page <= 1; $('#po-next').disabled = page * 25 >= data.total;
       } catch(error) { if (current === generation) notify(error.message, true); }
@@ -205,12 +221,12 @@
   };
   form.onsubmit = async event => {
     event.preventDefault(); if (!form.reportValidity()) return;
-    const button = $('#po-save'); button.disabled = true; notify('Saving draft…');
+    const button = $('#po-save'); button.disabled = true; notify('Saving purchase order…');
     const submitted = JSON.stringify(read());
     try {
       const result = await api('/api/orders' + (state.number ? '/' + encodeURIComponent(state.number) : ''), {method:state.number ? 'PUT' : 'POST', body:submitted});
       if (JSON.stringify(read()) === submitted) { dirty = false; window.location.assign(base + '/' + encodeURIComponent(result.number)); }
-      else { state = result; dirty = true; notify('Draft saved. You made further changes while saving; save again to include them.'); $('#po-save-state').textContent = state.number; }
+      else { state = result; dirty = true; notify('Purchase order saved. You made further changes while saving; save again to include them.'); $('#po-save-state').textContent = state.number; $('#po-save').textContent = 'Save changes'; }
     } catch(error) { notify(error.message, true); }
     finally { button.disabled = false; }
   };

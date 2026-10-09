@@ -115,8 +115,6 @@ def init_app(app, database, products, pricing):
     @bp.get("/<number>/edit")
     def edit(number):
         doc = get_doc(number)
-        if doc["status"] != "draft":
-            return redirect(url_for("purchase_orders.view", number=number))
         return render_template("purchase_orders/editor.html", po=doc, csrf=csrf_token(), currencies=app.config["PO_CURRENCIES"])
 
     @bp.get("/<number>/print")
@@ -169,6 +167,12 @@ def init_app(app, database, products, pricing):
         data = payload()
         return jsonify(repo.update(number, revision(data), validated(data, original), session["username"], scope()))
 
+    @bp.delete("/api/orders/<number>")
+    def delete_order(number):
+        get_doc(number)
+        repo.delete(number, revision(payload()), scope())
+        return jsonify(deleted=True, number=number)
+
     @bp.post("/api/orders/<number>/<action>")
     def action_order(number, action):
         original = get_doc(number)
@@ -186,7 +190,7 @@ def init_app(app, database, products, pricing):
         data = payload()
         original = get_doc(data["number"]) if isinstance(data.get("number"), str) else None
         doc = validated(data, original)
-        doc.update(number=(original or {}).get("number", "Pending"), status="draft")
+        doc.update(number=(original or {}).get("number", "Pending"), status=(original or {}).get("status", "draft"))
         return jsonify(pages=svg_pages(doc), subtotal=doc["subtotal"], discount=doc["discount"], total=doc["total"])
 
     @bp.get("/api/products")

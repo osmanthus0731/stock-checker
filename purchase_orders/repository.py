@@ -34,12 +34,17 @@ class Repository:
         data = deepcopy(data)
         data.update(updated_by=username, updated_at=utc_now())
         result = self.collection.update_one(
-            {"_id": number, "revision": revision, "status": "draft", **scope},
+            {"_id": number, "revision": revision, **scope},
             {"$set": data, "$inc": {"revision": 1},
              "$push": {"history": {"action": "edited", "by": username, "at": data["updated_at"]}}})
         if not result.matched_count:
-            raise Conflict("This PO changed or is locked. Reload before continuing.")
+            raise Conflict("This PO changed or was deleted. Reload before continuing.")
         return self.get(number, scope)
+
+    def delete(self, number, revision, scope):
+        result = self.collection.delete_one({"_id": number, "revision": revision, **scope})
+        if not result.deleted_count:
+            raise Conflict("This PO changed or was deleted. Reload before continuing.")
 
     def transition(self, number, revision, status, username, scope):
         allowed = ["draft"] if status == "finalised" else ["draft", "finalised"]
