@@ -32,15 +32,13 @@ def migrate_users(db, apply=False):
         if key in keys: raise Conflict('Case-insensitive username collisions exist. Resolve them explicitly before migration.')
         keys[key]=u
     missing=[name for name in INITIAL_USERS if name.casefold() not in keys]
-    promote=[u['username'] for u in existing if u.get('role')=='worker']
-    plan={'existing':len(existing),'create':missing,'promote_to_admin':promote,'apply':apply}
+    plan={'existing':len(existing),'create':missing,'apply':apply}
     if not apply: return plan
     # Intended for a maintenance window; web writes stay gated until this finishes.
     db.users.create_index('username_key',unique=True,partialFilterExpression={'username_key':{'$type':'string'}})
     for u in existing:
         name,key=username(u['username'])
         updates={'username_key':key,'active':u.get('active',True),'account_revision':u.get('account_revision',0)}
-        if u.get('role')=='worker': updates['role']='admin'
         if 'created_at' not in u: updates['created_at']=None  # unknown historical creation date is not invented
         db.users.update_one({'_id':u['_id']},{'$set':updates})
     for name in missing:
@@ -62,7 +60,8 @@ def save_user(store, data, actor, user_id=None):
         raise Conflict('Run the reviewed user migration before managing accounts.')
     name,key=username(data.get('username',''))
     role=data.get('role','admin')
-    if role != 'admin': raise Invalid('New and edited accounts must be Admin.')
+    if role not in ('admin', 'worker') or (role == 'worker' and not user_id):
+        raise Invalid('New accounts must be Admin.')
     active=data.get('active',True)
     if type(active) is not bool: raise Invalid('Active must be true or false.')
     display=bounded_text(data.get('display_name',name),'Display name',100,True)
@@ -75,6 +74,8 @@ def save_user(store, data, actor, user_id=None):
             ids=[user_id]+([ObjectId(user_id)] if ObjectId.is_valid(user_id) else [])
             old=db.users.find_one({'_id':{'$in':ids}},**kw)
             if not old: raise Invalid('Account not found.')
+            if role == 'worker' and old.get('role') != 'worker':
+                raise Invalid('Admin accounts cannot be changed to Worker.')
             if data.get('revision')!=old.get('account_revision',0): raise Conflict('Account changed. Refresh before saving.')
             if old.get('role')=='admin' and old.get('active',True) and (role!='admin' or not active):
                 if db.users.count_documents({'role':'admin','active':{'$ne':False}},**kw)<=1:
