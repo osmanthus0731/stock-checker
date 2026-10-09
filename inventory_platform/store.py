@@ -50,7 +50,7 @@ class Store:
                       'source':'website','movement_type':reason,'reason':reason,'changes':changes,
                       'before':before,'after':after,'unit':'units','reference':str(data.get('reference',''))[:120],
                       'note':note,'sync_status':'pending','record_version':version,
-                      'demand_units':before['total']-after['total'] if reason=='issued' else 0,'request':deepcopy(data)}
+                      'demand_units':max(0,before['total']-after['total']) if reason=='issued' else 0,'request':deepcopy(data)}
             result=self.db.products.update_one({'_id':product['_id'],'stock_revision':expected},
                 {'$set':{**cloud_fields(after),'stock_revision':version,'last_stock_update':ts,
                          'last_stock_user':actor['username'],'sync_status':'pending','last_stock_event':event_id}},**kw)
@@ -101,6 +101,9 @@ class Store:
             event_id=f'access:{uid}:{version}'
             changes=[{'slot':s,'location':actual['location_'+s.lower()],'previous':confirmed[k],
                       'change':actual[k]-confirmed[k],'new':actual[k]} for s,k in (('A','a'),('B','b')) if actual[k]!=confirmed[k]]
+            if actual['total']!=confirmed['total']:
+                changes.append({'slot':'Office','location':'Office total','previous':confirmed['total'],
+                                'change':actual['total']-confirmed['total'],'new':actual['total']})
             self.db.stock_movements.insert_one({'_id':event_id,'event_id':event_id,'uid':uid,'product_name':mapped['name'],
                 'category':mapped['category'],'supplier':mapped['supplier'],'timestamp':stamp(),'business_date':business_date(),
                 'user_id':'access-service','username':'Microsoft Access','source':'access','movement_type':'observed_correction',

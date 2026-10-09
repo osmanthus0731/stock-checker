@@ -39,12 +39,11 @@ def username(value):
 
 
 def stock_state(product):
-    required=('stock_a','stock_b','location_a','location_b')
+    required=('stock_a','stock_b','stock','location_a','location_b')
     if any(k not in product for k in required):
-        raise Conflict('Stock A/B mapping is not confirmed. Run the staged sync baseline before editing.')
-    a=integer(product['stock_a'],'StockA'); b=integer(product['stock_b'],'StockB')
-    total=integer(product.get('stock'),'Total stock')
-    if total!=a+b: raise Conflict('Total stock differs from StockA + StockB. Resolve the baseline discrepancy first.')
+        raise Conflict('Access stock fields are not confirmed. Run the staged sync baseline before editing.')
+    a=integer(product['stock_a'],'StockA',-2_000_000_000); b=integer(product['stock_b'],'StockB',-2_000_000_000)
+    total=integer(product['stock'],'Stock_office',-2_000_000_000)
     return {'a':a,'b':b,'total':total,'location_a':str(product['location_a'] or ''),'location_b':str(product['location_b'] or '')}
 
 
@@ -62,21 +61,25 @@ def adjustment(product, data):
     note=bounded_text(data.get('note',''),'Note',1000,reason=='other')
     mode=data.get('mode','set')
     if mode not in ('set','adjust'): raise Invalid('Select new quantities or adjustments.')
-    a=integer(data.get('a'),'StockA',-2_000_000_000 if mode=='adjust' else 0)
-    b=integer(data.get('b'),'StockB',-2_000_000_000 if mode=='adjust' else 0)
-    if mode=='adjust': a+=before['a']; b+=before['b']
-    a=integer(a,'New StockA'); b=integer(b,'New StockB')
-    total=integer(a+b,'Total stock')
+    a=integer(data.get('a'),'StockA',-2_000_000_000)
+    b=integer(data.get('b'),'StockB',-2_000_000_000)
+    total=integer(data.get('total',0 if mode=='adjust' else before['total']),'Stock_office',-2_000_000_000)
+    if mode=='adjust': a+=before['a']; b+=before['b']; total+=before['total']
+    a=integer(a,'New StockA',-2_000_000_000); b=integer(b,'New StockB',-2_000_000_000)
+    total=integer(total,'New Stock_office',-2_000_000_000)
     after={**before,'a':a,'b':b,'total':total}
-    deltas=[a-before['a'],b-before['b']]
-    if deltas==[0,0]: raise Invalid('No stock quantities changed.')
-    if reason=='transfer' and (sum(deltas)!=0 or not all(deltas)):
-        raise Invalid('A transfer must move the same quantity between A and B without changing total stock.')
+    deltas=[a-before['a'],b-before['b'],total-before['total']]
+    if deltas==[0,0,0]: raise Invalid('No stock quantities changed.')
+    if reason=='transfer' and (deltas[0]+deltas[1]!=0 or not deltas[0] or not deltas[1] or deltas[2]!=0):
+        raise Invalid('A transfer must move the same quantity between A and B without changing Stock_office.')
     if reason in ('received','return') and any(d<0 for d in deltas): raise Invalid('Receipts/returns cannot reduce stock.')
     if reason in ('issued','damaged') and any(d>0 for d in deltas): raise Invalid('Issues/damage cannot increase stock.')
     changes=[{'slot':slot,'location':before['location_'+slot.lower()], 'previous':before[key],
               'change':after[key]-before[key], 'new':after[key]} for slot,key in (('A','a'),('B','b')) if before[key]!=after[key]]
     if any(not c['location'] for c in changes): raise Invalid('A changed stock slot must have a confirmed location.')
+    if before['total']!=after['total']:
+        changes.append({'slot':'Office','location':'Office total','previous':before['total'],
+                        'change':after['total']-before['total'],'new':after['total']})
     return before,after,changes,reason,note
 
 
@@ -86,9 +89,9 @@ def access_product(row):
     def required(k):
         if k not in r or r[k] is None: raise Invalid(f'Access is missing {k}.')
         return r[k]
-    a=integer(required('stocka'),'StockA'); b=integer(required('stockb'),'StockB')
-    total=integer(required('stock_office'),'Stock_office')
-    if total!=a+b: raise Conflict('Access Stock_office does not equal StockA + StockB.')
+    a=integer(required('stocka'),'StockA',-2_000_000_000)
+    b=integer(required('stockb'),'StockB',-2_000_000_000)
+    total=integer(required('stock_office'),'Stock_office',-2_000_000_000)
     state={'a':a,'b':b,'total':total,'location_a':str(r.get('loc_film_box') or ''), 'location_b':str(r.get('loc_wh') or '')}
     return {'uid':str(required('part_id')).strip(),'name':str(r.get('desc') or ''),'readable_id':str(r.get('mssid') or ''),
             'category':str(r.get('cat') or 'Uncategorized'),'supplier':str(r.get('supplr') or ''), **cloud_fields(state)}

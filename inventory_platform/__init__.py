@@ -236,7 +236,9 @@ def init_app(app,db):
                 d=date.fromisoformat(m['business_date']); weekly[(d-timedelta(days=d.weekday())).isoformat()]+=amount
                 monthly[m['business_date'][:7]]+=amount
             if m['movement_type']=='received':
-                amount=sum(max(0,c['change']) for c in m['changes']); s['received']+=amount;daily[m['business_date']]['received']+=amount
+                office=next((c for c in m['changes'] if c.get('slot')=='Office'),None)
+                amount=max(0,office['change']) if office else sum(max(0,c['change']) for c in m['changes'])
+                s['received']+=amount;daily[m['business_date']]['received']+=amount
         coverage={d['_id']:d.get('complete',False) for d in db.business_days.find({'_id':{'$gte':start,'$lte':end}})}
         closed=sum(coverage.get(d,False) for d in day_list)
         rows=[]
@@ -250,7 +252,7 @@ def init_app(app,db):
         rows.sort(key=lambda r:r['issued'],reverse=True)
         return jsonify(cards={'Total SKUs':len(rows),'Products with movements':sum(r['frequency']>0 for r in rows),
             'Units issued':sum(r['issued'] for r in rows),'Units received':sum(r['received'] for r in rows),
-            'Low stock':sum(0<r['stock']<=r['reorder_threshold'] for r in rows),'Out of stock':sum(r['stock']==0 for r in rows),
+            'Low stock':sum(0<r['stock']<=r['reorder_threshold'] for r in rows),'Out of stock':sum(r['stock']<=0 for r in rows),
             'Fast-moving candidates':sum(r['issued']>0 for r in rows[:10]),'No issues in selected period':sum(r['issued']==0 for r in rows),
             'Below configured reorder threshold':sum(r['suggested_quantity'] is not None and r['suggested_quantity']>0 for r in rows)},
             rows=rows,daily=list(daily.values()),weekly=dict(weekly),monthly=dict(monthly),categories=dict(categories),

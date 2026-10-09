@@ -25,9 +25,9 @@ def main():
     db.products.insert_one(mapped)
     store=Store(db,lambda fn:fn({}))
     try:
-        after={**original,'a':original['a']-1,'b':original['b']+1}
+        after={**original,'a':original['a']-1,'b':original['b']+1,'total':-1}
         store.change(uid,{'event_id':str(uuid4()),'revision':0,'mode':'set','a':str(after['a']),
-            'b':str(after['b']),'reason':'transfer','reference':'staging','note':''},
+            'b':str(after['b']),'total':str(after['total']),'reason':'correction','reference':'staging','note':''},
             {'id':'staging','username':'Staging'})
         event=db.sync_events.find_one()
         journal=Journal(copy.parent/'two-way-receipts.sqlite')
@@ -36,12 +36,12 @@ def main():
         if current!=after:raise AssertionError('Cloud to Access readback failed.')
         if Worker(store,access,Journal(copy.parent/'two-way-receipts.sqlite')).process(event)!='synced':
             raise AssertionError('Restart idempotency failed.')
-        sold={**after,'b':after['b']-1,'total':after['total']-1}
-        access.compare_and_set(uid,after,sold);current=sold
+        external={**after,'b':after['b']-1,'total':-2}
+        access.compare_and_set(uid,after,external);current=external
         if store.observe(access.read(uid))!='observed':raise AssertionError('Access to cloud observation failed.')
-        if stock_state(db.products.find_one({'uid':uid}))!=sold:raise AssertionError('Cloud stock did not match Access sale.')
+        if stock_state(db.products.find_one({'uid':uid}))!=external:raise AssertionError('Cloud stock did not match Access change.')
         if db.stock_movements.find_one({'source':'access'})['demand_units']!=0:
-            raise AssertionError('Unknown Access sale was incorrectly counted as confirmed demand.')
+            raise AssertionError('Unknown Access change was incorrectly counted as confirmed demand.')
         print('cloud_to_access=passed; access_to_cloud=passed; restart=passed')
     finally:
         if current!=original:access.compare_and_set(uid,current,original)

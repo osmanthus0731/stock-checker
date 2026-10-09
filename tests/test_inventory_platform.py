@@ -26,15 +26,16 @@ def mapped():
             'access_confirmed':{'a':8,'b':2,'total':10,'location_a':'Film','location_b':'WH'},'access_sync_eligible':True,'stock_revision':0,'sync_status':'synced'}
 
 
-def request(**kw): return {'event_id':str(uuid4()),'revision':0,'mode':'set','a':'7','b':'3','reason':'transfer','reference':'R1','note':'move',**kw}
+def request(**kw): return {'event_id':str(uuid4()),'revision':0,'mode':'set','a':'7','b':'3','total':'10','reason':'transfer','reference':'R1','note':'move',**kw}
 
 
-def test_access_mapping_and_total_invariant():
+def test_access_mapping_accepts_independent_and_negative_stock():
     row={'Part_id':'P1','Desc':'Name','Mssid':'M','Stock_office':10,'Loc_film_box':'A','StockA':8,'Loc_wh':'B','StockB':2,'Cat':'C','Supplr':'S'}
     p=access_product(row)
     assert (p['stock_a'],p['stock_b'],p['stock'],p['supplier'])==(8,2,10,'S')
-    row['Stock_office']=11
-    with pytest.raises(Conflict): access_product(row)
+    row.update(Stock_office=-11,StockA=-8,StockB=2)
+    changed=access_product(row)
+    assert (changed['stock_a'],changed['stock_b'],changed['stock'])==(-8,2,-11)
 
 
 def test_stock_rules(mapped):
@@ -43,6 +44,10 @@ def test_stock_rules(mapped):
     with pytest.raises(Invalid): adjustment(mapped,request(a='9',b='3'))
     with pytest.raises(Invalid): adjustment(mapped,request(reason='issued',a='9',b='1'))
     with pytest.raises(Invalid): adjustment(mapped,request(reason='other',note=''))
+    before,after,changes,_,_=adjustment(mapped,request(a='8',b='2',total='-5',reason='correction'))
+    assert after['total']==-5 and after['a']==8 and changes==[{'slot':'Office','location':'Office total','previous':10,'change':-15,'new':-5}]
+    negative={**mapped,'stock_a':-8,'stock_b':2,'stock':-11}
+    assert adjustment(negative,request(a='-9',b='2',total='-11',reason='correction'))[1]['a']==-9
 
 
 def test_atomic_change_idempotency_conflict_and_readonly_sources(db,mapped):
@@ -67,7 +72,7 @@ def test_ineligible_access_product_cannot_be_edited(db,mapped):
 
 def test_issue_is_demand_and_access_observation_is_not(db,mapped):
     db.products.insert_one(deepcopy(mapped));store=Store(db,direct)
-    issue=request(a='6',b='2',reason='issued');m=store.change('P1',issue,{'id':'U','username':'A'})
+    issue=request(a='6',b='2',total='8',reason='issued');m=store.change('P1',issue,{'id':'U','username':'A'})
     assert m['demand_units']==2
     event=db.sync_events.find_one();store.acknowledge(event)
     observed={**mapped,'stock_a':5,'stock_b':3,'stock':8,'locations':[{'slot':'A','area':'Film','quantity':5},{'slot':'B','area':'WH','quantity':3}]}
@@ -80,11 +85,12 @@ def test_account_migration_casefold_and_last_admin(db):
     db.users.insert_one({'_id':'old','username':'Admin','role':'admin','active':True})
     plan=migrate_users(db,False);assert 'Admin' not in plan['create'] and 'MsT' in plan['create']
     migrate_users(db,True);assert db.users.count_documents({})==6
+    assert db.users.count_documents({'role':'worker'})==0
     store=Store(db,direct);admin=db.users.find_one({'username':'Admin'});actor={'id':'old','username':'Admin'}
     with pytest.raises(Invalid): save_user(store,{'username':'Admin','display_name':'Admin','role':'worker','active':True,'revision':0},actor,'old')
-    with pytest.raises(Conflict): save_user(store,{'username':'ADMIN','display_name':'X','role':'worker','active':True},actor)
-    saved=save_user(store,{'username':'New worker','display_name':'New','role':'worker','active':True},actor)
-    assert saved['role']=='worker'
+    with pytest.raises(Conflict): save_user(store,{'username':'ADMIN','display_name':'X','role':'admin','active':True},actor)
+    saved=save_user(store,{'username':'New admin','display_name':'New','role':'admin','active':True},actor)
+    assert saved['role']=='admin'
 
 
 def test_missing_days_stockouts_forecast_backtest_and_replenishment():

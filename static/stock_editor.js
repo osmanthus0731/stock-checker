@@ -1,4 +1,122 @@
-(()=>{'use strict';const dialog=document.querySelector('#stock-dialog');if(!dialog)return;const form=document.querySelector('#stock-form'),msg=document.querySelector('#stock-message');let current=null;const token=dialog.dataset.csrf;const request=async(path,options={})=>{const response=await fetch('/platform'+path,{...options,headers:{'Content-Type':'application/json','X-CSRF-Token':token,...options.headers}});let data;try{data=await response.json()}catch{throw Error('Request failed. Reload and try again.')}if(!response.ok)throw Error(data.error||'Request failed.');return data};const show=(text,error=false)=>{msg.textContent=text;msg.className=error?'platform-error':''};const uuid=()=>crypto.randomUUID?crypto.randomUUID():`${Date.now()}00000000-0000-4000-8000-000000000000`.slice(0,36);
-function review(){if(!current?.state)return;const mode=form.mode.value;const a=Number(form.a.value),b=Number(form.b.value);const nextA=mode==='adjust'?current.state.a+a:a,nextB=mode==='adjust'?current.state.b+b:b;document.querySelector('#stock-review p').textContent=`StockA ${current.state.a} → ${nextA}; StockB ${current.state.b} → ${nextB}; Total ${current.state.total} → ${nextA+nextB}. Reason: ${form.reason.selectedOptions[0]?.text||'not selected'}.`}
-async function open(uid){dialog.showModal();show('Loading…');form.reset();form.uid.value=uid;form.event_id.value=uuid();try{current=await request('/api/stock/'+encodeURIComponent(uid));document.querySelector('#stock-product').textContent=`${current.uid} · ${current.name} · ${current.mssid}`;form.revision.value=current.revision;form.a.value=current.state?.a??'';form.b.value=current.state?.b??'';document.querySelector('#stock-a-label').textContent=`Location A: ${current.state?.location_a||'unconfirmed'}`;document.querySelector('#stock-b-label').textContent=`Location B: ${current.state?.location_b||'unconfirmed'}`;document.querySelector('#stock-meta').textContent=`Last updated: ${current.last_updated||'not recorded'} · By: ${current.last_updated_by||'not recorded'} · Sync: ${current.sync_status}`;document.querySelector('#stock-save').disabled=!current.writable;show(current.error||(!current.writable?'Editing is currently staged or the Access baseline is unconfirmed. No live quantity can be changed.':''),Boolean(current.error));review()}catch(e){show(e.message,true);document.querySelector('#stock-save').disabled=true}}
-document.addEventListener('click',e=>{const b=e.target.closest('[data-stock-edit]');if(b)open(b.dataset.stockEdit);if(e.target.closest('[data-dialog-close]'))dialog.close()});form.addEventListener('input',review);form.addEventListener('change',review);form.addEventListener('submit',async e=>{e.preventDefault();if(!confirm(document.querySelector('#stock-review p').textContent+' Confirm this stock update?'))return;const button=document.querySelector('#stock-save');button.disabled=true;const values=Object.fromEntries(new FormData(form));const body={event_id:values.event_id,revision:values.revision,mode:values.mode,a:values.a,b:values.b,reason:values.reason,reference:values.reference,note:values.note};try{const result=await request('/api/stock/'+encodeURIComponent(values.uid),{method:'POST',body:JSON.stringify(body)});show(`Saved to Cloud · Pending Access Sync · Event ${result.movement.event_id}`);form.event_id.value=uuid();setTimeout(()=>location.reload(),900)}catch(error){show(error.message,true);button.disabled=false}});const recent=document.querySelector('#recent-stock-movements');if(recent)request('/api/stock/'+encodeURIComponent(recent.dataset.uid)).then(data=>{recent.querySelector('p').remove();if(!data.recent.length){const p=document.createElement('p');p.className='muted';p.textContent='No stock movements recorded yet.';recent.append(p)}data.recent.forEach(m=>{const row=document.createElement('div');row.className='loc';row.textContent=`${m.business_date} · ${m.reason} · ${m.username} · ${m.changes.map(c=>`${c.location}: ${c.previous} → ${c.new}`).join('; ')} · ${m.sync_status}`;recent.append(row)})}).catch(error=>{recent.querySelector('p').textContent=error.message})})();
+(() => {
+  'use strict';
+  const dialog = document.querySelector('#stock-dialog');
+  if (!dialog) return;
+  const form = document.querySelector('#stock-form');
+  const message = document.querySelector('#stock-message');
+  const token = dialog.dataset.csrf;
+  let current = null;
+
+  async function request(path, options = {}) {
+    const response = await fetch('/platform' + path, {
+      ...options,
+      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token, ...options.headers}
+    });
+    let data;
+    try { data = await response.json(); }
+    catch { throw Error('Request failed. Reload and try again.'); }
+    if (!response.ok) throw Error(data.error || 'Request failed.');
+    return data;
+  }
+
+  function show(text, error = false) {
+    message.textContent = text;
+    message.className = error ? 'platform-error' : '';
+  }
+
+  function nextEventId() {
+    return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}00000000-0000-4000-8000-000000000000`.slice(0, 36);
+  }
+
+  function review() {
+    if (!current?.state) return;
+    const mode = form.elements.mode.value;
+    const input = name => Number(form.elements[name].value);
+    const next = {
+      a: mode === 'adjust' ? current.state.a + input('a') : input('a'),
+      b: mode === 'adjust' ? current.state.b + input('b') : input('b'),
+      total: mode === 'adjust' ? current.state.total + input('total') : input('total')
+    };
+    document.querySelector('#stock-review p').textContent =
+      `StockA ${current.state.a} → ${next.a}; StockB ${current.state.b} → ${next.b}; ` +
+      `Stock_office ${current.state.total} → ${next.total}. ` +
+      `Reason: ${form.elements.reason.selectedOptions[0]?.text || 'not selected'}.`;
+  }
+
+  async function open(uid) {
+    dialog.showModal();
+    show('Loading…');
+    form.reset();
+    form.elements.uid.value = uid;
+    form.elements.event_id.value = nextEventId();
+    try {
+      current = await request('/api/stock/' + encodeURIComponent(uid));
+      document.querySelector('#stock-product').textContent = `${current.uid} · ${current.name} · ${current.mssid}`;
+      form.elements.revision.value = current.revision;
+      for (const field of ['a', 'b', 'total']) form.elements[field].value = current.state?.[field] ?? '';
+      document.querySelector('#stock-a-label').textContent = `Location A: ${current.state?.location_a || 'unconfirmed'}`;
+      document.querySelector('#stock-b-label').textContent = `Location B: ${current.state?.location_b || 'unconfirmed'}`;
+      document.querySelector('#stock-meta').textContent =
+        `Last updated: ${current.last_updated || 'not recorded'} · By: ${current.last_updated_by || 'not recorded'} · Sync: ${current.sync_status}`;
+      document.querySelector('#stock-save').disabled = !current.writable;
+      show(current.error || (!current.writable ? 'Access stock fields are not fully confirmed for editing.' : ''), Boolean(current.error));
+      review();
+    } catch (error) {
+      show(error.message, true);
+      document.querySelector('#stock-save').disabled = true;
+    }
+  }
+
+  document.addEventListener('click', event => {
+    const button = event.target.closest('[data-stock-edit]');
+    if (button) open(button.dataset.stockEdit);
+    if (event.target.closest('[data-dialog-close]')) dialog.close();
+  });
+  form.addEventListener('input', review);
+  form.addEventListener('change', event => {
+    if (event.target.name === 'mode' && current?.state) {
+      for (const field of ['a', 'b', 'total']) {
+        form.elements[field].value = form.elements.mode.value === 'adjust' ? 0 : current.state[field];
+      }
+    }
+    review();
+  });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!confirm(document.querySelector('#stock-review p').textContent + ' Confirm this stock update?')) return;
+    const button = document.querySelector('#stock-save');
+    button.disabled = true;
+    const values = Object.fromEntries(new FormData(form));
+    const body = {event_id: values.event_id, revision: values.revision, mode: values.mode,
+      a: values.a, b: values.b, total: values.total, reason: values.reason,
+      reference: values.reference, note: values.note};
+    try {
+      const result = await request('/api/stock/' + encodeURIComponent(values.uid),
+        {method: 'POST', body: JSON.stringify(body)});
+      show(`Saved to Cloud · Pending Access Sync · Event ${result.movement.event_id}`);
+      form.elements.event_id.value = nextEventId();
+      setTimeout(() => location.reload(), 900);
+    } catch (error) {
+      show(error.message, true);
+      button.disabled = false;
+    }
+  });
+
+  const recent = document.querySelector('#recent-stock-movements');
+  if (recent) request('/api/stock/' + encodeURIComponent(recent.dataset.uid)).then(data => {
+    recent.querySelector('p').remove();
+    if (!data.recent.length) {
+      const empty = document.createElement('p');
+      empty.className = 'muted';
+      empty.textContent = 'No stock movements recorded yet.';
+      recent.append(empty);
+    }
+    for (const movement of data.recent) {
+      const row = document.createElement('div');
+      row.className = 'loc';
+      row.textContent = `${movement.business_date} · ${movement.reason} · ${movement.username} · ` +
+        `${movement.changes.map(c => `${c.location}: ${c.previous} → ${c.new}`).join('; ')} · ${movement.sync_status}`;
+      recent.append(row);
+    }
+  }).catch(error => { recent.querySelector('p').textContent = error.message; });
+})();

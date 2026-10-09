@@ -4,7 +4,7 @@ This extends the existing Flask app, Mongo products/pricing, PO blueprint and bl
 
 ## Confirmed decisions
 
-- Stock_office equals StockA + StockB. The website edits A/B; total is derived. Existing discrepant records are flagged, not silently repaired.
+- `Stock_office`, `StockA`, and `StockB` are independent signed quantities. Negative values and differences between the office figure and A+B are preserved. The website editor shows all three fields; only missing stock fields remain ineligible for automatic writeback.
 - Login selects an active Mongo username without a password or PIN, as requested. This identifies an account but does not prove the person's identity. Permissions attach to the selected role/account. Deploy behind the company's trusted access boundary.
 - Production Access tables are never migrated. The website products and pricing were refreshed only after timestamped Mongo backups. Access write-back requires a path-bound staging receipt and explicit deployment flags.
 
@@ -12,7 +12,7 @@ This extends the existing Flask app, Mongo products/pricing, PO blueprint and bl
 
 1. Inspect and back up: read-only Mongo metadata confirmed 8 users, 3,028 products and 3,477 pricing records. Three requested names already exist case-insensitively. Timestamped Access file copies are in ignored `backups/`; source size/mtime were stable and copies SHA-256 verified. A copy taken while Access is running is not a substitute for a quiescent production backup.
 2. Account selector, stable account IDs, casefold uniqueness, soft deactivation and administrative user history. Migration is a separate explicit command, never an import-time write.
-3–4. A/B editing, reviewed before/after values, Mongo transaction updating inventory + append-only movement + durable sync event. Request UUID and revision prevent duplicate/stale changes. Transactions fail closed on unsupported Mongo deployments.
+3–4. A/B/office editing, reviewed before/after values, Mongo transaction updating inventory + append-only movement + durable sync event. Request UUID and revision prevent duplicate/stale changes. Transactions fail closed on unsupported Mongo deployments.
 5–6. Windows-only polling worker with parameterised, conditional absolute Access updates, read-back verification, durable local SQLite receipts and an exclusive process lock. No repeated incremental adjustments after acknowledgement failures. Read-only Access snapshots produce observed corrections, never sales. Boot task installer is provided but not executed on the running system.
 7–9. History/CSV, real movement analytics, explicitly closed business-day coverage, censored-stockout exclusions, rolling backtests, staged forecasts and transparent replenishment settings. Daily refresh belongs to the worker, not each Gunicorn worker.
 10. Seasonal candidates are evaluated only when history is sufficient. No invented historical demand, automatic purchasing, or assumed holiday effects.
@@ -30,7 +30,7 @@ This extends the existing Flask app, Mongo products/pricing, PO blueprint and bl
 | Part_id | uid |
 | Desc | name |
 | Mssid | readable_id |
-| Stock_office | stock = stock_a + stock_b |
+| Stock_office | stock (independent; may differ from A+B or be negative) |
 | Loc_film_box / StockA | location_a / stock_a |
 | Loc_wh / StockB | location_b / stock_b |
 | Cat | category |
@@ -60,7 +60,7 @@ The service uses an OS file lock to prevent overlapping local workers, restarts 
 
 ## Current deployment state and limitations
 
-- The latest Access stock refresh imported five newly changed valid product quantities into Mongo after a timestamped Extended JSON backup. A read-only comparison confirmed zero remaining differences across 1,021 valid Access products. The 1,864 Access rows with missing, negative or inconsistent A/B/total quantities remain in the website but are not eligible for website stock editing or automatic writeback.
+- The latest Access stock refresh imported 75 changed products and one new product after a timestamped Extended JSON backup. A read-only comparison confirmed zero differences across 1,097 products with all three stock fields present. The 1,788 rows missing at least one stock field remain in the website but are not eligible for automatic stock writeback. Negative and unequal values are accepted.
 - The `Cus_Price` refresh imported 3,738 distinct P/S price records. Thirty exactly identical Access price rows were merged into one record each. Access `RM` is normalized to website `MYR`.
 - Native DAO works with this legacy Jet MDB. A copy-based integration test passed website-to-Access transfer, Access-to-website observation, restart idempotency and restoration. The existing 2,839-row `sync_state` collection is preserved; worker control records use `inventory_sync_control`.
 - Windows denied a system-level boot task. `tools/install_sync_startup.ps1` installs the worker in the current user's Startup folder, so automatic sync begins when that Windows account signs in. A live worker process and heartbeat must be checked after each rollout.

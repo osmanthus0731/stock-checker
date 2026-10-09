@@ -23,7 +23,7 @@ def aggregate(movements, coverage, start, end, uid):
         if not row or movement.get('uid')!=uid: continue
         if movement.get('movement_type')=='issued':
             row['demand']+=max(0,int(movement.get('demand_units',0))); row['events']+=1
-        if movement.get('after',{}).get('total')==0 or movement.get('before',{}).get('total')==0: row['censored']=True
+        if movement.get('after',{}).get('total',1)<=0 or movement.get('before',{}).get('total',1)<=0: row['censored']=True
         if movement.get('movement_type')=='observed_correction': row['unexplained']=True
     for row in days.values():
         row['usable']=row['complete'] and not row['censored'] and not row['unexplained']

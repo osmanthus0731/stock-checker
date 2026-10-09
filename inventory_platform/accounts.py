@@ -32,18 +32,20 @@ def migrate_users(db, apply=False):
         if key in keys: raise Conflict('Case-insensitive username collisions exist. Resolve them explicitly before migration.')
         keys[key]=u
     missing=[name for name in INITIAL_USERS if name.casefold() not in keys]
-    plan={'existing':len(existing),'create':missing,'apply':apply}
+    promote=[u['username'] for u in existing if u.get('role')=='worker']
+    plan={'existing':len(existing),'create':missing,'promote_to_admin':promote,'apply':apply}
     if not apply: return plan
     # Intended for a maintenance window; web writes stay gated until this finishes.
     db.users.create_index('username_key',unique=True,partialFilterExpression={'username_key':{'$type':'string'}})
     for u in existing:
         name,key=username(u['username'])
         updates={'username_key':key,'active':u.get('active',True),'account_revision':u.get('account_revision',0)}
+        if u.get('role')=='worker': updates['role']='admin'
         if 'created_at' not in u: updates['created_at']=None  # unknown historical creation date is not invented
         db.users.update_one({'_id':u['_id']},{'$set':updates})
     for name in missing:
         db.users.insert_one({'_id':str(uuid4()),'username':name,'username_key':name.casefold(),'display_name':name,
-                             'role':'admin' if name=='Admin' else 'worker','active':True,'created_at':stamp(),'account_revision':0})
+                             'role':'admin','active':True,'created_at':stamp(),'account_revision':0})
     db.platform_meta.update_one({'_id':'users_ready'},{'$set':{'ready':True,'at':stamp()}},upsert=True)
     return plan
 
@@ -59,8 +61,8 @@ def save_user(store, data, actor, user_id=None):
     if not db.platform_meta.find_one({'_id':'users_ready','ready':True}):
         raise Conflict('Run the reviewed user migration before managing accounts.')
     name,key=username(data.get('username',''))
-    role=data.get('role','worker')
-    if role not in ('admin','worker'): raise Invalid('Select Admin or Worker (read-only default).')
+    role=data.get('role','admin')
+    if role != 'admin': raise Invalid('New and edited accounts must be Admin.')
     active=data.get('active',True)
     if type(active) is not bool: raise Invalid('Active must be true or false.')
     display=bounded_text(data.get('display_name',name),'Display name',100,True)

@@ -36,7 +36,8 @@ def product_doc(raw,stamp):
     mapped=access_product(raw);mapped.update(stock_revision=0,access_confirmed={
         'a':mapped['stock_a'],'b':mapped['stock_b'],'total':mapped['stock'],
         'location_a':mapped['location_a'],'location_b':mapped['location_b']},
-        sync_status='synced',stock_total_consistent=True,access_sync_eligible=True,_source='access',_imported_at=stamp)
+        sync_status='synced',stock_total_consistent=mapped['stock']==mapped['stock_a']+mapped['stock_b'],
+        access_sync_eligible=True,_source='access',_imported_at=stamp)
     mapped['locations']=[{'slot':'A','area':mapped['location_a'],'quantity':mapped['stock_a']},
                          {'slot':'B','area':mapped['location_b'],'quantity':mapped['stock_b']}]
     return mapped
@@ -97,7 +98,7 @@ def main():
             changed=existing is None or any(existing.get(k)!=doc[k] for k in ('stock','stock_a','stock_b'))
             fields={k:v for k,v in doc.items() if k!='stock_revision'}
             if existing:
-                if existing.get('sync_status') in ('pending','failed','conflict'):
+                if existing.get('sync_status') in ('pending','failed'):
                     raise RuntimeError('Product has an unresolved sync state; refusing to overwrite it.')
                 update={'$set':fields}
                 if changed:update['$inc']={'stock_revision':1}

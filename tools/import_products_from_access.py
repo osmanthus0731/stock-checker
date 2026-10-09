@@ -160,6 +160,7 @@ def run():
         sum_locations = slots["A"]["quantity"] + slots["B"]["quantity"]
         total_stock = total_from_access if total_from_access is not None else sum_locations
         total_consistent = total_stock == sum_locations
+        stock_fields_present = all(rec.get(key) is not None for key in ("stocka", "stockb", "stock_office"))
 
         vml = vol_ml(name) or vol_ml(mssid)
 
@@ -189,9 +190,10 @@ def run():
             "access_confirmed": ({
                 "a": slots["A"]["quantity"], "b": slots["B"]["quantity"], "total": total_stock,
                 "location_a": slots["A"]["location"], "location_b": slots["B"]["location"],
-            } if total_consistent else None),
+            } if stock_fields_present else None),
+            "access_sync_eligible": stock_fields_present,
             "stock_revision": 0,
-            "sync_status": "synced" if total_consistent else "conflict",
+            "sync_status": "synced" if stock_fields_present else "conflict",
             "supplier": str(g(rec, "supplr", "supplier") or "").strip(),
             "volume_ml": vml,
             "_source": "access",
